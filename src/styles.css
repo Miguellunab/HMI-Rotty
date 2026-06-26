@@ -347,6 +347,26 @@ h3 {
   gap: 12px;
 }
 
+.connectionError {
+  display: grid;
+  gap: 4px;
+  border-left: 4px solid var(--yellow);
+  background: rgba(255, 224, 51, 0.12);
+  padding: 10px 12px;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.connectionError strong {
+  color: var(--yellow);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.connectionError span {
+  line-height: 1.25;
+}
+
 .splitButtons,
 .metricRow {
   gap: 10px;
@@ -448,6 +468,10 @@ h3 {
   border-top: 1px solid #2a3433;
   background: rgba(10, 14, 14, 0.74);
   padding: 12px;
+}
+
+.positionActions {
+  grid-column: 1 / -1;
 }
 
 .positionPanel h3 {
@@ -574,12 +598,13 @@ h3 {
 }
 
 .axisStack .axisInputs {
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr;
 }
 
 .axisStack input {
-  min-height: 42px;
+  min-height: 54px;
+  font-size: 22px;
+  font-weight: 900;
 }
 
 .axisStack button {
@@ -592,8 +617,13 @@ h3 {
   background: linear-gradient(180deg, rgba(35, 42, 31, 0.98), rgba(18, 24, 22, 0.98));
 }
 
-.gripperCard > button {
-  width: 100%;
+.positionActions .gripperCard {
+  box-shadow: none;
+}
+
+.positionActions .gripperCard .splitButtons button {
+  min-height: 48px;
+  font-size: 15px;
 }
 
 .consolePanel {

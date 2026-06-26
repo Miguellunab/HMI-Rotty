@@ -422,14 +422,15 @@ function ControlView({
   return (
     <div className="controlGrid">
       <div className="controlCenter">
-        <RobotStage status={status} compact />
+        <RobotStage status={status} compact>
+          <GripperCard gripper={status.gripper} disabled={disabled} onCommand={onCommand} />
+        </RobotStage>
         {consolePanel}
       </div>
       <section className="axisStack">
         {axes.map((name) => (
           <AxisCard key={name} name={name} axis={status.axes[name]} disabled={disabled} onCommand={onCommand} />
         ))}
-        <GripperCard gripper={status.gripper} disabled={disabled} onCommand={onCommand} />
       </section>
     </div>
   );
@@ -488,7 +489,12 @@ function ConnectionPanel({
           <input value={port} onChange={(event) => onPortChange(event.target.value.toUpperCase())} disabled={connected} placeholder="COM4" />
         </label>
       )}
-      {connectionError && <p className="connectionError">{connectionError}</p>}
+      {connectionError && (
+        <div className="connectionError" role="alert">
+          <strong>Aviso de conexion</strong>
+          <span>{connectionError}</span>
+        </div>
+      )}
       <div className="splitButtons">
         <button onClick={onRefreshPorts} disabled={connected}>
           Actualizar
@@ -534,7 +540,7 @@ function SystemPanel({ status }: { status: MachineStatus }) {
   );
 }
 
-function RobotStage({ status, compact = false }: { status: MachineStatus; compact?: boolean }) {
+function RobotStage({ status, compact = false, children }: { status: MachineStatus; compact?: boolean; children?: ReactNode }) {
   return (
     <section className={compact ? "robotStage compact" : "robotStage"} aria-label="Vista 3D del brazo">
       <model-viewer
@@ -562,6 +568,7 @@ function RobotStage({ status, compact = false }: { status: MachineStatus; compac
         <Metric label="Y" value={`${status.axes.Y.pos.toFixed(2)} deg`} />
         <Metric label="Z" value={`${status.axes.Z.pos.toFixed(2)} mm`} />
         <Metric label="W" value={`${status.axes.W.pos.toFixed(2)} deg`} />
+        {children && <div className="positionActions">{children}</div>}
       </div>
     </section>
   );
@@ -578,14 +585,12 @@ function AxisCard({
   disabled: boolean;
   onCommand: SendCommand;
 }) {
-  const [value, setValue] = useState(name === "Z" ? "10" : "45");
-  const [speed, setSpeed] = useState(String(axis.speed_sps || axis.speed_us || 700));
+  const [value, setValue] = useState("0");
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
-  const min = name === "Z" ? 0 : -90;
+  const min = name === "Z" ? -20 : -90;
   const max = name === "Z" ? 20 : 90;
   const clampedValue = Math.min(max, Math.max(min, Number(value) || 0));
-  const clampedSpeed = Math.min(3000, Math.max(50, Number(speed) || speedSps));
 
   return (
     <article className="axisCard">
@@ -614,10 +619,6 @@ function AxisCard({
           {name === "Z" ? "Altura mm" : "Grados"}
           <input min={min} max={max} type="number" value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
-        <label>
-          Velocidad
-          <input min="50" max="3000" type="number" value={speed} onChange={(event) => setSpeed(event.target.value)} />
-        </label>
       </div>
 
       <div className="splitButtons">
@@ -626,10 +627,7 @@ function AxisCard({
         </button>
         <button
           className="primary"
-          onClick={async () => {
-            await onCommand(`SPEED ${name} ${clampedSpeed}`, false);
-            await onCommand(`MOVE ${name} ${unit} ${clampedValue}`);
-          }}
+          onClick={() => onCommand(`MOVE ${name} ${unit} ${clampedValue}`)}
           disabled={disabled}
         >
           MOVE
@@ -648,9 +646,6 @@ function GripperCard({
   disabled: boolean;
   onCommand: SendCommand;
 }) {
-  const [angle, setAngle] = useState(String(gripper?.user_angle ?? 80));
-  const clampedAngle = Math.min(90, Math.max(-90, Number(angle) || 0));
-
   return (
     <article className="axisCard gripperCard">
       <div className="axisHeader">
@@ -660,28 +655,14 @@ function GripperCard({
         </div>
         <span className={gripper?.ready ? "badge good" : "badge warn"}>{gripper?.state ?? "Sin dato"}</span>
       </div>
-      <input aria-label="Angulo pinza" type="range" min="-90" max="90" value={clampedAngle} onChange={(event) => setAngle(event.target.value)} />
-      <div className="axisInputs">
-        <label>
-          Grados
-          <input min="-90" max="90" type="number" value={angle} onChange={(event) => setAngle(event.target.value)} />
-        </label>
-        <label>
-          Estado
-          <input value={gripper?.ready ? "Lista" : "Sin dato"} disabled />
-        </label>
-      </div>
       <div className="splitButtons">
         <button onClick={() => onCommand("GRIPPER OPEN")} disabled={disabled}>
-          OPEN
+          Abrir
         </button>
-        <button className="primary" onClick={() => onCommand(`GRIPPER ANGLE ${clampedAngle}`)} disabled={disabled}>
-          MOVE
+        <button className="primary" onClick={() => onCommand("GRIPPER CLOSE")} disabled={disabled}>
+          Cerrar
         </button>
       </div>
-      <button onClick={() => onCommand("GRIPPER CLOSE")} disabled={disabled}>
-        CLOSE
-      </button>
     </article>
   );
 }
