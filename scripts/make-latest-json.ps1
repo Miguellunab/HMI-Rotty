@@ -17,6 +17,7 @@ if (-not (Test-Path $sigPath)) {
 }
 
 $fileName = $installer.Name
+$encodedFileName = [uri]::EscapeDataString($fileName)
 $json = [ordered]@{
   version = $Version
   notes = "HMI Rotty $Version"
@@ -24,10 +25,11 @@ $json = [ordered]@{
   platforms = [ordered]@{
     "windows-x86_64" = [ordered]@{
       signature = (Get-Content -Raw $sigPath).Trim()
-      url = "https://github.com/$Repo/releases/download/v$Version/$fileName"
+      url = "https://github.com/$Repo/releases/download/v$Version/$encodedFileName"
     }
   }
 } | ConvertTo-Json -Depth 5
 
-$json | Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot "..\latest.json")
+$output = Join-Path $PSScriptRoot "..\latest.json"
+[System.IO.File]::WriteAllText($output, $json, [System.Text.UTF8Encoding]::new($false))
 Write-Host "Wrote latest.json for $fileName"
