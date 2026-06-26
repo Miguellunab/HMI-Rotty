@@ -1,0 +1,21 @@
+[package]
+name = "hmi-brazo-scara"
+version = "0.1.1"
+edition = "2021"
+
+[lib]
+name = "hmi_brazo_scara_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serialport = "4"
+tauri = { version = "2", features = [] }
+tauri-plugin-process = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"

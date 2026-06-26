@@ -1,0 +1,89 @@
+# HMI Brazo SCARA - Agent Context
+
+## Goal
+
+Desktop HMI for a SCARA arm controlled by Arduino UNO + CNC Shield + A4988 + NEMA 17 motors.
+
+No Arduino Cloud. The app talks directly to the Arduino over serial at `115200`.
+
+## Stack
+
+- Tauri v2
+- React 19
+- TypeScript
+- Vite
+- Rust backend using the `serialport` crate
+
+## Firmware
+
+Firmware lives in:
+
+`codigo_arduino/Miguel_Brazo`
+
+Read these first before changing protocol/UI behavior:
+
+- `README_PROTOCOL.md`
+- `Protocol.cpp`
+- `Config.h`
+- `Axis.h`
+
+## Serial Protocol
+
+Send one text command per line.
+
+The Arduino replies with newline-delimited JSON only. Do not parse human menus.
+
+Baudrate:
+
+```txt
+115200
+```
+
+Supported commands:
+
+```txt
+PING
+STATUS
+ENABLE
+DISABLE
+HOME X
+HOME Y
+HOME Z
+HOME ALL
+RELEASE X
+RELEASE Y
+RELEASE Z
+MOVE X STEPS 1000
+MOVE X DEG 50
+MOVE Y DEG -30
+MOVE Z MM 10
+SPEED X 700
+SPEED Y 700
+SPEED Z 700
+```
+
+Important limits from firmware:
+
+- `SPEED` accepts `100..5000` microseconds.
+- X/Y use degrees.
+- Z uses millimeters.
+- X/Y/Z positive direction is the physical positive direction documented in `Config.h`.
+- Movement commands return an `ok/cmd` JSON line and then a `status` JSON line.
+
+Example status:
+
+```json
+{"ok":true,"type":"status","axes":{"X":{"homed":true,"steps":444,"unit":"deg","pos":49.950,"speed_us":700,"limit":false},"Y":{"homed":false,"steps":0,"unit":"deg","pos":0.000,"speed_us":700,"limit":false},"Z":{"homed":false,"steps":0,"unit":"mm","pos":0.000,"speed_us":700,"limit":false}}}
+```
+
+## App Behavior
+
+- Backend lists ports, connects/disconnects, sends one command per line, and emits serial events.
+- Frontend parses JSON responses and updates live status.
+- Polling can be off, 500 ms, or 1 s.
+- Do not poll while the UI is waiting for a command status.
+- Console is optional/collapsible but useful for debugging.
+
+## Minimalism Rule
+
+Keep this app boring and direct. No command DSL, no state machine library, no custom UI framework. The firmware protocol is small; plain TypeScript and Tauri commands are enough.

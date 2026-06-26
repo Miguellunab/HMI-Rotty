@@ -1,0 +1,687 @@
+:root {
+  color-scheme: dark;
+  --grid: 32px;
+  --bg: #0d1111;
+  --rail: #090c0c;
+  --panel: #151b1b;
+  --panel-2: #1d2524;
+  --field: #0f1515;
+  --text: #f2f5ef;
+  --muted: #9ca8a3;
+  --line: #020404;
+  --blue: #0b7cff;
+  --blue-2: #1454c8;
+  --red: #ff4b36;
+  --green: #69d64b;
+  --yellow: #ffe033;
+  --ink: #050707;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 42px;
+  border: 1px solid #283231;
+  border-radius: 4px;
+  background: #25302f;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 18px rgba(0, 0, 0, 0.2);
+  transition: transform 120ms ease, filter 120ms ease, border-color 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 2px;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #2d3836;
+  border-radius: 4px;
+  background: var(--field);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%) right 16px center / 7px 7px no-repeat,
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%) right 11px center / 7px 7px no-repeat,
+    var(--field);
+  padding-right: 34px;
+}
+
+input[type="range"] {
+  accent-color: var(--blue);
+  padding: 0;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.appShell {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 70% 20%, rgba(11, 124, 255, 0.08), transparent 26%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    var(--bg);
+  background-position: 0 0, 212px 92px, 212px 92px, 0 0;
+  background-size: auto, var(--grid) var(--grid), var(--grid) var(--grid), auto;
+}
+
+.sideRail {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 22px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  border-right: 1px solid #26302f;
+  background:
+    linear-gradient(90deg, rgba(11, 124, 255, 0.06), transparent 42%),
+    var(--rail);
+  padding: 26px 18px 20px;
+  box-shadow: 20px 0 45px rgba(0, 0, 0, 0.22);
+}
+
+.appBrand p {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.appBrand span {
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.appBrand strong {
+  color: var(--blue);
+  font-family: Georgia, serif;
+  font-size: 28px;
+  font-style: italic;
+  line-height: 1;
+  text-shadow: 2px 2px 0 var(--ink);
+}
+
+.appBrand small {
+  display: block;
+  margin-top: 4px;
+  color: #697572;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.navTabs {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+}
+
+.navTabs button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 66px;
+  border: 1px solid #1f2a2a;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #151c1d, #101616);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.navTabs button span:last-child {
+  color: #b8c5c2;
+}
+
+.navTabs .active {
+  border-color: #246cb8;
+  background: linear-gradient(180deg, rgba(11, 124, 255, 0.18), rgba(13, 23, 31, 0.95));
+  color: white;
+  box-shadow: inset 0 0 0 1px rgba(11, 124, 255, 0.24), 0 10px 26px rgba(11, 124, 255, 0.12);
+}
+
+.navTabs .active span:last-child,
+.navTabs .active .navIcon {
+  color: var(--blue);
+}
+
+.navIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  color: #7f9290;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.brandMark {
+  align-self: end;
+  position: sticky;
+  bottom: 20px;
+  min-height: 58px;
+  display: grid;
+  align-content: end;
+  overflow: visible;
+}
+
+.brandMark img {
+  width: 118px;
+  height: auto;
+  display: block;
+}
+
+.brandMark button {
+  display: none;
+  position: absolute;
+  right: 0;
+  bottom: 52px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-color: #253231;
+  background: #101716;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.brandMark:hover button,
+.brandMark.hidden button {
+  display: block;
+}
+
+.brandMark.hidden {
+  min-height: 58px;
+}
+
+.screen {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px;
+}
+
+.topBar,
+.splitButtons,
+.metricRow {
+  display: flex;
+  align-items: center;
+}
+
+.topBar {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionKicker {
+  color: var(--blue);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+h2 {
+  font-size: 32px;
+}
+
+h3 {
+  color: var(--blue);
+  font-size: 16px;
+}
+
+.statusPill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  border: 1px solid #293332;
+  background: #050606;
+  padding: 10px 12px;
+  font-size: 16px;
+  font-weight: 900;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.statusPill span {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--red);
+}
+
+.statusPill.online span {
+  background: var(--green);
+}
+
+.homeGrid {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(360px, 1fr) minmax(220px, 250px);
+  gap: 18px;
+  min-height: 0;
+}
+
+.leftStack,
+.rightStack,
+.axisStack {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.panel,
+.quickPanel,
+.axisCard,
+.robotStage,
+.consolePanel {
+  border: 1px solid #2a3433;
+  background: linear-gradient(180deg, rgba(29, 37, 36, 0.96), rgba(18, 24, 24, 0.98));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.panel,
+.quickPanel,
+.axisCard {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.connectionPanel {
+  gap: 12px;
+}
+
+.splitButtons,
+.metricRow {
+  gap: 10px;
+}
+
+.splitButtons button,
+.metricRow > * {
+  flex: 1;
+}
+
+.primary,
+.heroAction,
+.motorLock {
+  background: linear-gradient(180deg, var(--blue), var(--blue-2));
+  border-color: #2d8dff;
+}
+
+.enable {
+  background: linear-gradient(180deg, #505d5a, #384442);
+  border-color: #65736f;
+}
+
+.quickPanel button {
+  min-height: 42px;
+  font-size: 14px;
+}
+
+.heroAction {
+  min-height: 54px !important;
+  font-size: 18px !important;
+}
+
+.axisLights {
+  display: grid;
+  gap: 8px;
+}
+
+.axisLights div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.axisLights span {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.axisLights b {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--red);
+  box-shadow: 0 0 18px rgba(255, 75, 54, 0.35);
+}
+
+.axisLights b.ok {
+  background: var(--green);
+  box-shadow: 0 0 18px rgba(105, 214, 75, 0.35);
+}
+
+.robotStage {
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 560px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    #182120;
+  background-size: var(--grid) var(--grid);
+}
+
+.robotStage.compact {
+  height: min(600px, calc(100vh - 154px));
+  min-height: 0;
+}
+
+.robotStage.compact .modelSlot {
+  min-height: 0;
+}
+
+.modelSlot {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  background: transparent;
+  transform: translate(-48px, 101px);
+  --poster-color: transparent;
+}
+
+.positionPanel {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  border-top: 1px solid #2a3433;
+  background: rgba(10, 14, 14, 0.74);
+  padding: 12px;
+}
+
+.positionPanel h3 {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.metric {
+  min-width: 0;
+  border: 1px solid #2a3433;
+  background: #101716;
+  padding: 8px;
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
+.controlGrid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(320px, 1fr) minmax(300px, 430px);
+  gap: 16px;
+  min-height: 0;
+}
+
+.controlCenter {
+  display: grid;
+  gap: 16px;
+}
+
+.axisStack {
+  gap: 10px;
+}
+
+.axisStack .axisCard {
+  gap: 10px;
+  padding: 12px;
+}
+
+.axisStack .axisHeader,
+.axisStack .axisSpeed,
+.axisStack .axisCard > input[type="range"] {
+  grid-column: 1 / -1;
+}
+
+.axisCard {
+  background: linear-gradient(180deg, rgba(29, 37, 36, 0.98), rgba(18, 24, 24, 0.98));
+}
+
+.axisHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.axisHeader p {
+  color: var(--red);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.axisHeader h3 {
+  color: var(--text);
+  font-size: 22px;
+}
+
+.axisStack .axisHeader h3 {
+  font-size: 20px;
+}
+
+.axisSpeed {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.badge {
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.axisStack .badge {
+  padding: 4px 6px;
+  font-size: 10px;
+}
+
+.badge.good {
+  background: var(--green);
+}
+
+.badge.warn {
+  background: var(--yellow);
+}
+
+.axisInputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.axisStack label {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.axisStack .axisInputs {
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.axisStack input {
+  min-height: 42px;
+}
+
+.axisStack button {
+  min-height: 38px;
+  font-size: 12px;
+}
+
+.gripperCard {
+  border-color: #3b4633;
+  background: linear-gradient(180deg, rgba(35, 42, 31, 0.98), rgba(18, 24, 22, 0.98));
+}
+
+.gripperCard > button {
+  width: 100%;
+}
+
+.consolePanel {
+  overflow: hidden;
+  background: #0b1111;
+  box-shadow: none;
+}
+
+.consoleToggle {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  padding: 0 14px;
+  background: #101716;
+  color: #c3cfca;
+}
+
+.manual {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 10px;
+  padding: 12px;
+}
+
+.console {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  height: 170px;
+  overflow: auto;
+  border-top: 2px solid var(--line);
+  background: #0b0e10;
+  padding: 12px;
+}
+
+.console code {
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.console .tx {
+  color: #55c4ff;
+}
+
+.console .rx {
+  color: var(--green);
+}
+
+.console .error {
+  color: var(--red);
+}
+
+@media (max-width: 1120px) {
+  .homeGrid,
+  .controlGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .rightStack {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 780px) {
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+
+  .sideRail {
+    grid-template-rows: auto auto;
+    border-right: 0;
+    border-bottom: 3px solid var(--line);
+  }
+
+  .navTabs,
+  .rightStack,
+  .positionPanel,
+  .axisInputs {
+    grid-template-columns: 1fr;
+  }
+
+  .navTabs button {
+    min-height: 62px;
+  }
+
+  .brandMark {
+    display: none;
+  }
+}
