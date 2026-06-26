@@ -1,13 +1,13 @@
 {
   "name": "hmi-brazo-scara",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "tauri": "tauri",
     "build": "tsc && vite build",
-    "build:app": "powershell -ExecutionPolicy Bypass -Command \"$env:TAURI_SIGNING_PRIVATE_KEY_PATH=(Resolve-Path .\\tauri-update.key).Path; npm run tauri build\"",
+    "build:app": "powershell -ExecutionPolicy Bypass -Command \"$env:TAURI_SIGNING_PRIVATE_KEY=(Get-Content -Raw .\\tauri-update.key); npm run tauri build\"",
     "release:json": "powershell -ExecutionPolicy Bypass -File scripts/make-latest-json.ps1"
   },
   "dependencies": {

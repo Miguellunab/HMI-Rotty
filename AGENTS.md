@@ -84,6 +84,18 @@ Example status:
 - Do not poll while the UI is waiting for a command status.
 - Console is optional/collapsible but useful for debugging.
 
+## Release / Updater
+
+Pushing code to GitHub does not update installed apps. After user-facing changes, publish a new Tauri updater release:
+
+1. Bump the version in `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `scripts/make-latest-json.ps1`.
+2. Run `npm run build:app` to create signed updater artifacts.
+3. Run `npm run release:json` to generate `latest.json`.
+4. Commit and push the version/docs changes.
+5. Create a GitHub release named `vX.Y.Z` and upload the NSIS installer `.exe`, its `.sig`, and `latest.json`.
+
+The app checks `https://github.com/Miguellunab/HMI-Rotty/releases/latest/download/latest.json`; the download icon appears only when that file advertises a version newer than the installed one.
+
 ## Minimalism Rule
 
 Keep this app boring and direct. No command DSL, no state machine library, no custom UI framework. The firmware protocol is small; plain TypeScript and Tauri commands are enough.
