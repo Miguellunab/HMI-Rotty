@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 import "@google/model-viewer";
 import dmLogo from "./assets/brand/dm-logo.png";
 import "./styles.css";
@@ -104,6 +105,7 @@ function App() {
   const [connectionError, setConnectionError] = useState("");
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
   const connectedRef = useRef(false);
   const lastRxAt = useRef(Date.now());
 
@@ -171,11 +173,26 @@ function App() {
   async function installUpdate() {
     if (!update) return;
     setUpdateBusy(true);
+    setUpdateMessage("Preparando actualizacion...");
     try {
-      await update.downloadAndInstall();
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength || 0;
+          downloadedBytes = 0;
+          setUpdateMessage("Descargando actualizacion...");
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          setUpdateMessage(totalBytes ? `Descargando ${Math.round((downloadedBytes / totalBytes) * 100)}%...` : "Descargando actualizacion...");
+        } else {
+          setUpdateMessage("Instalando y reiniciando...");
+        }
+      });
       await relaunch();
     } catch (error) {
       setUpdateBusy(false);
+      setUpdateMessage("No se pudo instalar la actualizacion.");
       logError(error);
     }
   }
@@ -294,15 +311,23 @@ function App() {
             <h2>{view === "home" ? "Home" : "Control"}</h2>
           </div>
           {update && (
-            <button
-              className="updateButton"
-              onClick={installUpdate}
-              disabled={updateBusy}
-              title={`Actualizacion disponible: ${update.version}. Descargar e instalar.`}
-              aria-label={`Actualizacion disponible: ${update.version}`}
-            >
-              {updateBusy ? "..." : "↓"}
-            </button>
+            <div className="updateBox" role="status" aria-live="polite">
+              <button
+                className="updateButton"
+                onClick={installUpdate}
+                disabled={updateBusy}
+                title={`Actualizacion disponible: ${update.version}. Descargar e instalar.`}
+                aria-label={`Descargar e instalar actualizacion ${update.version}`}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v11" />
+                  <path d="m7 10 5 5 5-5" />
+                  <path d="M5 20h14" />
+                </svg>
+                <span>{updateBusy ? "Actualizando" : `Actualizar ${update.version}`}</span>
+              </button>
+              {updateMessage && <small>{updateMessage}</small>}
+            </div>
           )}
         </header>
 
