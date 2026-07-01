@@ -95,7 +95,7 @@ Pushing code to GitHub does not update installed apps. After user-facing changes
 5. Create a GitHub release named `vX.Y.Z` and upload the NSIS installer `.exe`, its `.sig`, and `latest.json`.
 
 The app checks `https://github.com/Miguellunab/HMI-Rotty/releases/latest/download/latest.json`; the download icon appears only when that file advertises a version newer than the installed one.
-`latest.json` must be UTF-8 without BOM and its asset URL must escape spaces, otherwise the updater can fail with `404 Not Found`.
+`latest.json` must be UTF-8 without BOM and its asset URL must match GitHub's published asset name; GitHub normalizes spaces to dots in release assets, otherwise the updater can fail with `404 Not Found`.
 
 ## Minimalism Rule
 

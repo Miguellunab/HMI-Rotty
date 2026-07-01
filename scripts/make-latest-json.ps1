@@ -17,7 +17,8 @@ if (-not (Test-Path $sigPath)) {
 }
 
 $fileName = $installer.Name
-$encodedFileName = [uri]::EscapeDataString($fileName)
+$assetFileName = $fileName.Replace(" ", ".")
+$encodedFileName = [uri]::EscapeDataString($assetFileName)
 $json = [ordered]@{
   version = $Version
   notes = "HMI Rotty $Version"
