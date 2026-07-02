@@ -7,6 +7,8 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 import "@google/model-viewer";
+import { $primitivesList } from "@google/model-viewer/lib/features/scene-graph/model.js";
+import { Group, MathUtils, Vector3 } from "three";
 import dmLogo from "./assets/brand/dm-logo.png";
 import "./styles.css";
 
@@ -14,6 +16,21 @@ type AxisName = "X" | "Y" | "Z" | "W";
 type BaudRate = 115200;
 type View = "home" | "control";
 type SendCommand = (command: string, waitsForStatus?: boolean) => void | Promise<void>;
+type AxisPose = Record<AxisName, number>;
+type GripperPose = "open" | "close";
+type SceneObject = Group;
+
+type RobotViewer = HTMLElement & {
+  model?: { [$primitivesList]?: { mesh: SceneObject }[] };
+};
+
+interface Rig {
+  x: Group;
+  y: Group;
+  z: Group;
+  w: Group;
+  jaws: { part: SceneObject; open: Vector3; close: Vector3 }[];
+}
 
 interface AxisStatus {
   homed: boolean;
@@ -48,6 +65,56 @@ interface SerialEvent {
 }
 
 const axes: AxisName[] = ["X", "Y", "Z", "W"];
+const robotPivots = {
+  x: new Vector3(0.0425, 0, -0.0175),
+  y: new Vector3(0.2645644849, -0.0008773029, -0.1530041905),
+  w: new Vector3(0.4053553898, 0.0199586406, -0.1470041904),
+};
+const zAxisBaseOffsetMm = 40;
+const zAxisTravelMm = 180;
+const gripperCloseTravelM = 0.02;
+const robotRigs = new WeakMap<RobotViewer, Rig>();
+const xOnlyParts = new Set([
+  "J1 coupler_J1 coupler",
+  "Z-axis Bottom Plate_Z-axis Bottom Plate",
+  "Base cover_Base cover",
+  "Top cover_Top cover",
+  "Z-axis Top Plate_Z-axis Top Plate",
+  "Smooth Rod D10mm L400mm_Smooth Rod D10mm L400mm",
+  "Smooth Rod D10mm L400mm_Smooth Rod D10mm L400mm001",
+  "Smooth Rod D10mm L400mm_Smooth Rod D10mm L400mm002",
+  "Smooth Rod D10mm L400mm_Smooth Rod D10mm L400mm003",
+]);
+const zAxisParts = new Set([
+  "brazodelcontrapeso_Arm 1",
+  "tapa_brazo_contrapeso_Arm 1 Cover",
+  "Stepper NEMA 17 -  20mm shaft_Stepper NEMA 17 -  20mm shaft002",
+  "Z-axis Mount Platform_Z-axis Mount Platform",
+  "Arm 1_Arm 1",
+  "Arm 1 Cover_Arm 1 Cover",
+  "soporte_rodamiento_6mm",
+  "flat head screw_am_B18.6.7M - M6 x 1.0 x 50 Type I Cross Recessed FHMS --50C",
+  "Linear Bearing 10x19x29mm_Linear Bearing 10x19x29mm",
+  "Linear Bearing 10x19x29mm_Linear Bearing 10x19x29mm001",
+  "Linear Bearing 10x19x29mm_Linear Bearing 10x19x29mm002",
+  "Linear Bearing 10x19x29mm_Linear Bearing 10x19x29mm003",
+]);
+const yAxisParts = new Set([
+  "J2 Coupler_J2 Coupler",
+  "Arm 2_Arm 2",
+  "Arm 2 Cover_Arm 2 Cover",
+  "NEMA 17 Stepper L24mm - 20mm shaft_NEMA 17 Stepper L24mm - 20mm shaft",
+]);
+const wAxisParts = new Set([
+  "J3 Coupler_J3 Coupler",
+  "ba_glipper",
+  "User Library-MG996R",
+]);
+const normalizePartName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+const xOnlyPartKeys = new Set([...xOnlyParts].map(normalizePartName));
+const zAxisPartKeys = new Set([...zAxisParts].map(normalizePartName));
+const yAxisPartKeys = new Set([...yAxisParts].map(normalizePartName));
+const wAxisPartKeys = new Set([...wAxisParts].map(normalizePartName));
 const fallbackStatus: MachineStatus = {
   ok: true,
   type: "status",
@@ -67,6 +134,119 @@ const fallbackStatus: MachineStatus = {
   },
   drivers_enabled: false,
 };
+
+function statusPose(status: MachineStatus): AxisPose {
+  return {
+    X: status.axes.X.pos,
+    Y: status.axes.Y.pos,
+    Z: status.axes.Z.pos,
+    W: status.axes.W.pos,
+  };
+}
+
+function queueModelRender(viewer: RobotViewer) {
+  const scene = Object.getOwnPropertySymbols(viewer)
+    .map((symbol) => (viewer as unknown as Record<symbol, { queueRender?: () => void }>)[symbol])
+    .find((value) => typeof value?.queueRender === "function");
+  scene?.queueRender?.();
+}
+
+function localPivot(child: Vector3, parent: Vector3) {
+  return new Vector3(child.x - parent.x, child.y - parent.y, child.z - parent.z);
+}
+
+function setupRobotRig(viewer: RobotViewer): Rig | null {
+  const existing = robotRigs.get(viewer);
+  if (existing) return existing;
+
+  const firstMesh = viewer.model?.[$primitivesList]?.[0]?.mesh;
+  const root = firstMesh?.parent?.parent ?? firstMesh?.parent;
+  if (!root?.add || !viewer.model?.[$primitivesList]) return null;
+
+  const x = new Group();
+  const z = new Group();
+  const y = new Group();
+  const w = new Group();
+  x.name = "sim_X_base";
+  z.name = "sim_Z_lift";
+  y.name = "sim_Y_link";
+  w.name = "sim_W_wrist";
+  x.position.copy(robotPivots.x);
+  z.position.copy(new Vector3(0, 0, 0));
+  y.position.copy(localPivot(robotPivots.y, robotPivots.x));
+  w.position.copy(localPivot(robotPivots.w, robotPivots.y));
+
+  root.add(x);
+  x.add(z);
+  z.add(y);
+  y.add(w);
+
+  let xParts = 0;
+  let zParts = 0;
+  let yParts = 0;
+  let wParts = 0;
+  const attached = new Set();
+  const jawParts: SceneObject[] = [];
+  for (const { mesh } of viewer.model[$primitivesList]) {
+    const part = mesh.parent ?? mesh;
+    const name = part.name || "";
+    const primitiveName = mesh.name || "";
+    const normalizedNames = `${normalizePartName(name)} ${normalizePartName(primitiveName)}`;
+    const key = normalizePartName(name);
+    const primitiveKey = normalizePartName(primitiveName);
+    const isJaw = key === "jaw" || key === "jaw001" || primitiveKey === "jaw" || primitiveKey === "jaw001";
+    if (attached.has(part)) continue;
+    if (wAxisPartKeys.has(key) || wAxisPartKeys.has(primitiveKey) || /basestep|rackstep|spurgear|jaw/.test(normalizedNames)) {
+      w.attach(part);
+      wParts += 1;
+    } else if (yAxisPartKeys.has(key) || yAxisPartKeys.has(primitiveKey)) {
+      y.attach(part);
+      yParts += 1;
+    } else if (zAxisPartKeys.has(key) || zAxisPartKeys.has(primitiveKey)) {
+      z.attach(part);
+      zParts += 1;
+    } else if (xOnlyPartKeys.has(key) || xOnlyPartKeys.has(primitiveKey)) {
+      x.attach(part);
+      xParts += 1;
+    } else {
+      continue;
+    }
+    attached.add(part);
+    if (isJaw) jawParts.push(part);
+  }
+
+  const jawCenter = jawParts.reduce((center, part) => center.add(part.position), new Vector3()).multiplyScalar(jawParts.length ? 1 / jawParts.length : 0);
+  const jaws = jawParts.map((part) => {
+    const open = part.position.clone();
+    const close = open.clone().add(jawCenter.clone().sub(open).setLength(gripperCloseTravelM));
+    return { part, open, close };
+  });
+  viewer.dataset.rigged = "true";
+  viewer.dataset.xParts = String(xParts);
+  viewer.dataset.zParts = String(zParts);
+  viewer.dataset.yParts = String(yParts);
+  viewer.dataset.wParts = String(wParts);
+  const rig = { x, y, z, w, jaws };
+  robotRigs.set(viewer, rig);
+  return rig;
+}
+
+function applyRobotPose(viewer: RobotViewer | null, pose: AxisPose, gripper: GripperPose = "open") {
+  if (!viewer) return;
+  const rig = setupRobotRig(viewer);
+  if (!rig) return;
+  rig.x.rotation.z = MathUtils.degToRad(pose.X);
+  rig.y.rotation.z = MathUtils.degToRad(pose.Y);
+  rig.z.position.z = (zAxisBaseOffsetMm - pose.Z) / 1000;
+  rig.w.rotation.z = MathUtils.degToRad(pose.W);
+  for (const jaw of rig.jaws) jaw.part.position.copy(gripper === "close" ? jaw.close : jaw.open);
+  viewer.dataset.poseX = String(pose.X);
+  viewer.dataset.poseY = String(pose.Y);
+  viewer.dataset.poseZ = String(pose.Z);
+  viewer.dataset.poseW = String(pose.W);
+  viewer.dataset.gripper = gripper;
+  queueModelRender(viewer);
+}
 
 function formatConnectionError(error: unknown) {
   const message = String(error);
@@ -198,10 +378,11 @@ function App() {
   }
 
   useEffect(() => {
-    refreshPorts().catch(logError);
+    const isTauri = "__TAURI_INTERNALS__" in window;
+    if (isTauri) refreshPorts().catch(logError);
     checkForUpdate();
 
-    const unlisten = listen<SerialEvent>("serial-event", (event) => {
+    const unlisten = isTauri ? listen<SerialEvent>("serial-event", (event) => {
       const entry = event.payload;
       if (!isHeartbeatLog(entry)) {
         setLogs((items) => [entry, ...items].slice(0, 300));
@@ -229,7 +410,7 @@ function App() {
       } catch {
         setLogs((items) => [{ direction: "error" as const, line: `JSON invalido: ${entry.line}`, timestamp: Date.now() }, ...items].slice(0, 300));
       }
-    });
+    }) : Promise.resolve(() => undefined);
 
     return () => {
       unlisten.then((stop) => stop());
@@ -348,7 +529,7 @@ function App() {
             onCommand={sendCommand}
           />
         ) : (
-          <ControlView status={status} disabled={disabled} onCommand={sendCommand} consolePanel={serialConsole} />
+          <ControlView status={status} connected={connected} disabled={disabled} onCommand={sendCommand} consolePanel={serialConsole} />
         )}
 
         {view === "home" && serialConsole}
@@ -435,28 +616,56 @@ function HomeView({
 
 function ControlView({
   status,
+  connected,
   disabled,
   onCommand,
   consolePanel,
 }: {
   status: MachineStatus;
+  connected: boolean;
   disabled: boolean;
   onCommand: SendCommand;
   consolePanel: ReactNode;
 }) {
+  const [pose, setPose] = useState<AxisPose>(() => statusPose(status));
+  const [gripper, setGripper] = useState<GripperPose>(status.gripper?.state === "close" ? "close" : "open");
+
+  useEffect(() => {
+    setPose(statusPose(status));
+    setGripper(status.gripper?.state === "close" ? "close" : "open");
+  }, [status]);
+
+  function previewGripper(next: GripperPose) {
+    setGripper(next);
+    if (!disabled) onCommand(`GRIPPER ${next.toUpperCase()}`);
+  }
+
   return (
     <div className="controlGrid">
       <div className="controlCenter">
-        <RobotStage status={status} compact>
-          <GripperCard gripper={status.gripper} disabled={disabled} onCommand={onCommand} />
-        </RobotStage>
+        <RobotStage status={status} pose={pose} gripper={gripper} compact />
+        <div className={`controlStatePill ${connected ? "online" : ""}`}>
+          <span />
+          {connected ? "Conectado" : "Desconectado"}
+        </div>
         {consolePanel}
       </div>
-      <section className="axisStack">
-        {axes.map((name) => (
-          <AxisCard key={name} name={name} axis={status.axes[name]} disabled={disabled} onCommand={onCommand} />
-        ))}
-      </section>
+      <aside className="controlSide">
+        <GripperCard onPreview={previewGripper} />
+        <section className="axisStack">
+          {axes.map((name) => (
+            <AxisCard
+              key={name}
+              name={name}
+              axis={status.axes[name]}
+              previewValue={pose[name]}
+              disabled={disabled}
+              onPreviewChange={(value) => setPose((current) => ({ ...current, [name]: value }))}
+              onCommand={onCommand}
+            />
+          ))}
+        </section>
+      </aside>
     </div>
   );
 }
@@ -565,12 +774,32 @@ function SystemPanel({ status }: { status: MachineStatus }) {
   );
 }
 
-function RobotStage({ status, compact = false, children }: { status: MachineStatus; compact?: boolean; children?: ReactNode }) {
+function RobotStage({
+  status,
+  pose = statusPose(status),
+  gripper = status.gripper?.state === "close" ? "close" : "open",
+  compact = false,
+  children,
+}: {
+  status: MachineStatus;
+  pose?: AxisPose;
+  gripper?: GripperPose;
+  compact?: boolean;
+  children?: ReactNode;
+}) {
+  const viewerRef = useRef<RobotViewer | null>(null);
+
+  useEffect(() => {
+    applyRobotPose(viewerRef.current, pose, gripper);
+  }, [pose, gripper]);
+
   return (
     <section className={compact ? "robotStage compact" : "robotStage"} aria-label="Vista 3D del brazo">
       <model-viewer
+        ref={viewerRef}
         className="modelSlot"
-        src="/robot.gltf"
+        src="/robot.gltf?v=20260702-v3"
+        onLoad={() => applyRobotPose(viewerRef.current, pose, gripper)}
         camera-controls
         disable-zoom
         disable-tap
@@ -602,20 +831,33 @@ function RobotStage({ status, compact = false, children }: { status: MachineStat
 function AxisCard({
   name,
   axis,
+  previewValue,
   disabled,
+  onPreviewChange,
   onCommand,
 }: {
   name: AxisName;
   axis: AxisStatus;
+  previewValue: number;
   disabled: boolean;
+  onPreviewChange: (value: number) => void;
   onCommand: SendCommand;
 }) {
-  const [value, setValue] = useState("0");
+  const [value, setValue] = useState(String(previewValue));
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
-  const min = name === "Z" ? -20 : -90;
-  const max = name === "Z" ? 20 : 90;
+  const min = name === "Z" ? 0 : -90;
+  const max = name === "Z" ? zAxisTravelMm : 90;
   const clampedValue = Math.min(max, Math.max(min, Number(value) || 0));
+
+  useEffect(() => {
+    setValue(String(previewValue));
+  }, [previewValue]);
+
+  function updateValue(next: string) {
+    setValue(next);
+    onPreviewChange(Math.min(max, Math.max(min, Number(next) || 0)));
+  }
 
   return (
     <article className="axisCard">
@@ -636,13 +878,13 @@ function AxisCard({
         min={min}
         max={max}
         value={clampedValue}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => updateValue(event.target.value)}
       />
 
       <div className="axisInputs">
         <label>
           {name === "Z" ? "Altura mm" : "Grados"}
-          <input min={min} max={max} type="number" value={value} onChange={(event) => setValue(event.target.value)} />
+          <input min={min} max={max} type="number" value={value} onChange={(event) => updateValue(event.target.value)} />
         </label>
       </div>
 
@@ -663,28 +905,22 @@ function AxisCard({
 }
 
 function GripperCard({
-  gripper,
-  disabled,
-  onCommand,
+  onPreview,
 }: {
-  gripper: MachineStatus["gripper"];
-  disabled: boolean;
-  onCommand: SendCommand;
+  onPreview: (state: GripperPose) => void;
 }) {
   return (
     <article className="axisCard gripperCard">
       <div className="axisHeader">
         <div>
           <p>Pinza</p>
-          <h3>{gripper ? `${gripper.user_angle} deg` : "sin dato"}</h3>
         </div>
-        <span className={gripper?.ready ? "badge good" : "badge warn"}>{gripper?.state ?? "Sin dato"}</span>
       </div>
       <div className="splitButtons">
-        <button onClick={() => onCommand("GRIPPER OPEN")} disabled={disabled}>
+        <button className="primary" onClick={() => onPreview("open")}>
           Abrir
         </button>
-        <button className="primary" onClick={() => onCommand("GRIPPER CLOSE")} disabled={disabled}>
+        <button onClick={() => onPreview("close")}>
           Cerrar
         </button>
       </div>

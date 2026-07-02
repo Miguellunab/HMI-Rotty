@@ -476,7 +476,7 @@ h3 {
 }
 
 .robotStage.compact {
-  height: min(600px, calc(100vh - 154px));
+  height: calc(100vh - 92px);
   min-height: 0;
 }
 
@@ -502,8 +502,19 @@ h3 {
   padding: 12px;
 }
 
+.robotStage.compact .positionPanel {
+  grid-template-columns: 72px repeat(4, minmax(0, 1fr)) minmax(170px, 210px);
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
 .positionActions {
   grid-column: 1 / -1;
+}
+
+.robotStage.compact .positionActions {
+  grid-column: auto;
 }
 
 .positionPanel h3 {
@@ -513,11 +524,21 @@ h3 {
   text-transform: uppercase;
 }
 
+.robotStage.compact .positionPanel h3 {
+  grid-column: auto;
+  font-size: 11px;
+  line-height: 1.1;
+}
+
 .metric {
   min-width: 0;
   border: 1px solid #2a3433;
   background: #101716;
   padding: 8px;
+}
+
+.robotStage.compact .metric {
+  padding: 5px 6px;
 }
 
 .metric span {
@@ -528,11 +549,20 @@ h3 {
   text-transform: uppercase;
 }
 
+.robotStage.compact .metric span {
+  font-size: 9px;
+}
+
 .metric strong {
   display: block;
   margin-top: 6px;
   overflow-wrap: anywhere;
   font-size: 16px;
+}
+
+.robotStage.compact .metric strong {
+  margin-top: 2px;
+  font-size: 12px;
 }
 
 .controlGrid {
@@ -544,23 +574,83 @@ h3 {
 }
 
 .controlCenter {
+  position: relative;
   display: grid;
-  gap: 16px;
+  gap: 8px;
+}
+
+.controlStatePill {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 75, 54, 0.42);
+  border-radius: 999px;
+  background: rgba(7, 10, 10, 0.72);
+  color: #f4c4bc;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+}
+
+.controlStatePill span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--red);
+  box-shadow: 0 0 12px rgba(255, 75, 54, 0.7);
+}
+
+.controlStatePill.online {
+  border-color: rgba(105, 214, 75, 0.42);
+  color: #c9f5bd;
+}
+
+.controlStatePill.online span {
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(105, 214, 75, 0.7);
+}
+
+.controlSide {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+  max-height: calc(100vh - 92px);
+  min-height: 0;
 }
 
 .axisStack {
-  gap: 10px;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .axisStack .axisCard {
-  gap: 10px;
-  padding: 12px;
+  grid-template-columns: 1fr 108px;
+  grid-template-areas:
+    "head head"
+    "range number"
+    "buttons buttons";
+  gap: 4px 8px;
+  padding: 6px 10px;
 }
 
-.axisStack .axisHeader,
-.axisStack .axisSpeed,
+.axisStack .axisHeader {
+  grid-area: head;
+}
+
+.axisStack .axisSpeed {
+  grid-area: head;
+}
+
 .axisStack .axisCard > input[type="range"] {
-  grid-column: 1 / -1;
+  grid-area: range;
+  align-self: end;
 }
 
 .axisCard {
@@ -571,7 +661,7 @@ h3 {
   display: flex;
   align-items: start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .axisHeader p {
@@ -586,12 +676,13 @@ h3 {
 }
 
 .axisStack .axisHeader h3 {
-  font-size: 20px;
+  font-size: 15px;
 }
 
 .axisSpeed {
+  display: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -625,37 +716,64 @@ h3 {
 }
 
 .axisStack label {
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 10px;
 }
 
 .axisStack .axisInputs {
+  grid-area: number;
   grid-template-columns: 1fr;
 }
 
 .axisStack input {
-  min-height: 54px;
-  font-size: 22px;
+  min-height: 32px;
+  font-size: 15px;
   font-weight: 900;
 }
 
+.axisStack input[type="range"] {
+  min-height: 24px;
+}
+
+.axisStack .splitButtons {
+  grid-area: buttons;
+  gap: 6px;
+}
+
 .axisStack button {
-  min-height: 38px;
-  font-size: 12px;
+  min-height: 26px;
+  font-size: 11px;
 }
 
 .gripperCard {
-  border-color: #3b4633;
-  background: linear-gradient(180deg, rgba(35, 42, 31, 0.98), rgba(18, 24, 22, 0.98));
+  border-color: #2a3433;
+  background: #101716;
 }
 
-.positionActions .gripperCard {
+.controlSide .gripperCard {
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
   box-shadow: none;
 }
 
-.positionActions .gripperCard .splitButtons button {
-  min-height: 48px;
-  font-size: 15px;
+.controlSide .gripperCard .axisHeader {
+  min-width: 0;
+}
+
+.controlSide .gripperCard .axisHeader p {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.controlSide .gripperCard .splitButtons {
+  gap: 8px;
+}
+
+.controlSide .gripperCard .splitButtons button {
+  min-height: 40px;
+  font-size: 13px;
 }
 
 .consolePanel {
