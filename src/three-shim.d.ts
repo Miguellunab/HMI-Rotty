@@ -19,6 +19,31 @@ declare module "three" {
     rotation: { z: number };
     add(...objects: unknown[]): void;
     attach(object: unknown): void;
+    updateWorldMatrix(updateParents: boolean, updateChildren: boolean): void;
+    getWorldPosition(target: Vector3): Vector3;
+  }
+
+  export class SphereGeometry {
+    constructor(radius?: number, widthSegments?: number, heightSegments?: number);
+  }
+
+  export class MeshBasicMaterial {
+    depthTest: boolean;
+    depthWrite: boolean;
+    transparent: boolean;
+    opacity: number;
+    constructor(params?: Record<string, unknown>);
+  }
+
+  export class Mesh {
+    name: string;
+    position: Vector3;
+    visible: boolean;
+    renderOrder: number;
+    material: MeshBasicMaterial;
+    constructor(geometry?: unknown, material?: MeshBasicMaterial);
+    updateWorldMatrix(updateParents: boolean, updateChildren: boolean): void;
+    getWorldPosition(target: Vector3): Vector3;
   }
 
   export const MathUtils: {

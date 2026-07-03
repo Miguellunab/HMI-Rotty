@@ -8,17 +8,55 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
 import "@google/model-viewer";
 import { $primitivesList } from "@google/model-viewer/lib/features/scene-graph/model.js";
-import { Group, MathUtils, Vector3 } from "three";
+import { Group, MathUtils, Mesh, MeshBasicMaterial, SphereGeometry, Vector3 } from "three";
 import dmLogo from "./assets/brand/dm-logo.png";
 import "./styles.css";
 
 type AxisName = "X" | "Y" | "Z" | "W";
 type BaudRate = 115200;
-type View = "home" | "control";
+type View = "home" | "control" | "inverse";
 type SendCommand = (command: string, waitsForStatus?: boolean) => void | Promise<void>;
 type AxisPose = Record<AxisName, number>;
 type GripperPose = "open" | "close";
+type ElbowMode = "auto" | "positive" | "negative";
 type SceneObject = Group;
+type MarkerName = "origin" | "shoulder" | "elbow" | "wrist" | "effector";
+
+interface ScaraGeometry {
+  link1Mm: number;
+  link2Mm: number;
+  link1AngleDeg: number;
+  link2AngleDeg: number;
+  zOffsetMm: number;
+  limits: AxisPose;
+}
+
+interface PointMm {
+  x: number;
+  y: number;
+}
+
+interface TargetMm extends PointMm {
+  z: number;
+}
+
+interface InverseKinematicsResult {
+  ok: boolean;
+  reason?: string;
+  pose: AxisPose;
+  elbow: Exclude<ElbowMode, "auto">;
+  commands: string[];
+}
+
+interface ForwardKinematics {
+  valid: boolean;
+  origin: PointMm;
+  shoulder: PointMm;
+  elbow: PointMm;
+  wrist: PointMm;
+  effector: PointMm;
+  z: number;
+}
 
 type RobotViewer = HTMLElement & {
   model?: { [$primitivesList]?: { mesh: SceneObject }[] };
@@ -29,6 +67,7 @@ interface Rig {
   y: Group;
   z: Group;
   w: Group;
+  markers: Record<MarkerName, Mesh>;
   jaws: { part: SceneObject; open: Vector3; close: Vector3 }[];
 }
 
@@ -73,6 +112,18 @@ const robotPivots = {
 const zAxisBaseOffsetMm = 40;
 const zAxisTravelMm = 180;
 const gripperCloseTravelM = 0.02;
+const radToDeg = 180 / Math.PI;
+const markerOffsets = {
+  origin: new Vector3(0, 0, 0.12),
+  shoulder: new Vector3(0, 0, -0.25),
+  elbow: new Vector3(0, 0, -0.053),
+  wrist: new Vector3(0, 0, -0.06),
+  effector: new Vector3(0, 0.015, 0.07),
+};
+const scaraGeometry: ScaraGeometry = {
+  ...makeScaraGeometry(),
+  limits: { X: 90, Y: 90, Z: 180, W: 90 },
+};
 const robotRigs = new WeakMap<RobotViewer, Rig>();
 const xOnlyParts = new Set([
   "J1 coupler_J1 coupler",
@@ -144,6 +195,151 @@ function statusPose(status: MachineStatus): AxisPose {
   };
 }
 
+function horizontalDistanceMm(a: Vector3, b: Vector3) {
+  return Math.hypot(b.x - a.x, b.y - a.y) * 1000;
+}
+
+function rotatePoint(point: PointMm, degrees: number): PointMm {
+  const angle = MathUtils.degToRad(degrees);
+  return {
+    x: point.x * Math.cos(angle) - point.y * Math.sin(angle),
+    y: point.x * Math.sin(angle) + point.y * Math.cos(angle),
+  };
+}
+
+function addPoint(a: PointMm, b: PointMm): PointMm {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+
+function vectorAngleDeg(point: PointMm) {
+  return Math.atan2(point.y, point.x) * radToDeg;
+}
+
+function makeScaraGeometry() {
+  const link1 = {
+    x: (robotPivots.y.x - robotPivots.x.x) * 1000,
+    y: (robotPivots.y.y - robotPivots.x.y) * 1000,
+  };
+  const link2 = {
+    x: (robotPivots.w.x - robotPivots.y.x) * 1000,
+    y: (robotPivots.w.y - robotPivots.y.y + markerOffsets.effector.y) * 1000,
+  };
+  const zOffsetMm = -(zAxisBaseOffsetMm / 1000 + (robotPivots.y.z - robotPivots.x.z) + (robotPivots.w.z - robotPivots.y.z) + markerOffsets.effector.z + 0.035 - 0.03) * 1000;
+  return {
+    link1Mm: Math.hypot(link1.x, link1.y),
+    link2Mm: Math.hypot(link2.x, link2.y),
+    link1AngleDeg: vectorAngleDeg(link1),
+    link2AngleDeg: vectorAngleDeg(link2),
+    zOffsetMm,
+  };
+}
+
+function forwardKinematics(status: MachineStatus, geometry: ScaraGeometry, pose = statusPose(status)): ForwardKinematics {
+  const link1 = rotatePoint({ x: geometry.link1Mm, y: 0 }, pose.X + geometry.link1AngleDeg);
+  const link2 = rotatePoint({ x: geometry.link2Mm, y: 0 }, pose.X + pose.Y + geometry.link2AngleDeg);
+  const elbow = {
+    x: link1.x,
+    y: link1.y,
+  };
+  const effector = addPoint(elbow, link2);
+
+  return {
+    valid: status.axes.X.homed && status.axes.Y.homed && status.axes.Z.homed,
+    origin: { x: 0, y: 0 },
+    shoulder: { x: 0, y: 0 },
+    elbow,
+    wrist: effector,
+    effector,
+    z: geometry.zOffsetMm + pose.Z,
+  };
+}
+
+function clampAxis(name: AxisName, value: number, geometry = scaraGeometry) {
+  return Math.min(geometry.limits[name], Math.max(name === "Z" ? 0 : -geometry.limits[name], value));
+}
+
+function roundAxis(value: number) {
+  return Math.round(value);
+}
+
+function formatAxisValue(value: number) {
+  return String(roundAxis(value));
+}
+
+function angleDelta(a: number, b: number) {
+  return Math.abs(a - b);
+}
+
+function inverseKinematics(target: TargetMm, geometry: ScaraGeometry, currentPose: AxisPose, elbowMode: ElbowMode = "auto"): InverseKinematicsResult {
+  const x = Number.isFinite(target.x) ? target.x : 0;
+  const y = Number.isFinite(target.y) ? target.y : 0;
+  const z = Number.isFinite(target.z) ? target.z : 0;
+  const radius = Math.hypot(x, y);
+  const minReach = Math.abs(geometry.link1Mm - geometry.link2Mm);
+  const maxReach = geometry.link1Mm + geometry.link2Mm;
+  const basePose = { ...currentPose, Z: clampAxis("Z", z - geometry.zOffsetMm, geometry) };
+
+  if (z < geometry.zOffsetMm || basePose.Z !== z - geometry.zOffsetMm) {
+    return { ok: false, reason: `Z fuera de limite: 0..${geometry.limits.Z} mm`, pose: basePose, elbow: "positive", commands: [] };
+  }
+
+  if (radius < minReach || radius > maxReach) {
+    return { ok: false, reason: `Fuera de alcance XY: ${minReach.toFixed(1)}..${maxReach.toFixed(1)} mm`, pose: basePose, elbow: "positive", commands: [] };
+  }
+
+  const cosY = Math.min(1, Math.max(-1, (x * x + y * y - geometry.link1Mm ** 2 - geometry.link2Mm ** 2) / (2 * geometry.link1Mm * geometry.link2Mm)));
+  const angleOffset = geometry.link2AngleDeg - geometry.link1AngleDeg;
+  const solutions = ([1, -1] as const).map((sign) => {
+    const gamma = sign * Math.acos(cosY);
+    const phi = Math.atan2(y, x) - Math.atan2(geometry.link2Mm * Math.sin(gamma), geometry.link1Mm + geometry.link2Mm * Math.cos(gamma));
+    const pose = {
+      X: phi * radToDeg - geometry.link1AngleDeg,
+      Y: gamma * radToDeg - angleOffset,
+      Z: basePose.Z,
+      W: currentPose.W,
+    };
+    return {
+      elbow: (sign > 0 ? "positive" : "negative") as Exclude<ElbowMode, "auto">,
+      pose,
+      valid: pose.X === clampAxis("X", pose.X, geometry) && pose.Y === clampAxis("Y", pose.Y, geometry),
+      distance: angleDelta(pose.X, currentPose.X) + angleDelta(pose.Y, currentPose.Y) + Math.abs(pose.Z - currentPose.Z),
+    };
+  });
+  const selected = (elbowMode === "auto" ? solutions.filter((item) => item.valid).sort((a, b) => a.distance - b.distance)[0] : solutions.find((item) => item.elbow === elbowMode)) ?? solutions[0];
+  const pose = { ...selected.pose, X: clampAxis("X", selected.pose.X, geometry), Y: clampAxis("Y", selected.pose.Y, geometry) };
+  if (!selected.valid) {
+    return { ok: false, reason: "La solucion requiere angulos fuera de -90..90 grados", pose, elbow: selected.elbow, commands: [] };
+  }
+
+  const xyCommands = [`MOVE X DEG ${formatAxisValue(pose.X)}`, `MOVE Y DEG ${formatAxisValue(pose.Y)}`];
+  const zCommand = `MOVE Z MM ${formatAxisValue(pose.Z)}`;
+  const commands = pose.Z > currentPose.Z ? [zCommand, ...xyCommands] : [...xyCommands, zCommand];
+  return { ok: true, pose, elbow: selected.elbow, commands, reason: undefined };
+}
+
+function markerPointMm(rig: Rig, name: MarkerName, origin: Vector3) {
+  rig.markers[name].updateWorldMatrix(true, false);
+  const point = rig.markers[name].getWorldPosition(new Vector3()).sub(origin);
+  return { x: point.x * 1000, y: point.y * 1000 };
+}
+
+function measuredKinematics(status: MachineStatus, rig: Rig): ForwardKinematics {
+  rig.markers.origin.updateWorldMatrix(true, false);
+  const origin = rig.markers.origin.getWorldPosition(new Vector3());
+  rig.markers.effector.updateWorldMatrix(true, false);
+  const effector = rig.markers.effector.getWorldPosition(new Vector3()).sub(origin);
+
+  return {
+    valid: status.axes.X.homed && status.axes.Y.homed && status.axes.Z.homed,
+    origin: { x: 0, y: 0 },
+    shoulder: markerPointMm(rig, "shoulder", origin),
+    elbow: markerPointMm(rig, "elbow", origin),
+    wrist: markerPointMm(rig, "wrist", origin),
+    effector: { x: effector.x * 1000, y: effector.y * 1000 },
+    z: -effector.z * 1000,
+  };
+}
+
 function queueModelRender(viewer: RobotViewer) {
   const scene = Object.getOwnPropertySymbols(viewer)
     .map((symbol) => (viewer as unknown as Record<symbol, { queueRender?: () => void }>)[symbol])
@@ -153,6 +349,40 @@ function queueModelRender(viewer: RobotViewer) {
 
 function localPivot(child: Vector3, parent: Vector3) {
   return new Vector3(child.x - parent.x, child.y - parent.y, child.z - parent.z);
+}
+
+function makeMarker(color: number, radius = 0.022) {
+  const marker = new Mesh(
+    new SphereGeometry(radius, 24, 16),
+    new MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.95,
+    }),
+  );
+  marker.renderOrder = 999;
+  marker.visible = false;
+  return marker;
+}
+
+function makeKinematicMarkers() {
+  return {
+    origin: makeMarker(0x0b7cff, 0.026),
+    shoulder: makeMarker(0xffe033, 0.022),
+    elbow: makeMarker(0x69d64b, 0.024),
+    wrist: makeMarker(0xff4b36, 0.026),
+    effector: makeMarker(0xffffff, 0.022),
+  };
+}
+
+function applyMarkerOffsets(rig: Rig) {
+  rig.markers.origin.position.copy(robotPivots.x.clone().add(new Vector3(0, 0, -0.09)).add(markerOffsets.origin));
+  rig.markers.shoulder.position.copy(new Vector3(0, 0, 0.035).add(markerOffsets.shoulder));
+  rig.markers.elbow.position.copy(new Vector3(0, 0, 0.035).add(markerOffsets.elbow));
+  rig.markers.wrist.position.copy(new Vector3(0, 0, 0.035).add(markerOffsets.wrist));
+  rig.markers.effector.position.copy(new Vector3(0, 0, 0.035).add(markerOffsets.effector));
 }
 
 function setupRobotRig(viewer: RobotViewer): Rig | null {
@@ -180,6 +410,12 @@ function setupRobotRig(viewer: RobotViewer): Rig | null {
   x.add(z);
   z.add(y);
   y.add(w);
+  const markers = makeKinematicMarkers();
+  root.add(markers.origin);
+  z.add(markers.shoulder);
+  y.add(markers.elbow);
+  w.add(markers.wrist);
+  w.add(markers.effector);
 
   let xParts = 0;
   let zParts = 0;
@@ -226,26 +462,34 @@ function setupRobotRig(viewer: RobotViewer): Rig | null {
   viewer.dataset.zParts = String(zParts);
   viewer.dataset.yParts = String(yParts);
   viewer.dataset.wParts = String(wParts);
-  const rig = { x, y, z, w, jaws };
+  const rig = { x, y, z, w, markers, jaws };
+  applyMarkerOffsets(rig);
   robotRigs.set(viewer, rig);
   return rig;
 }
 
-function applyRobotPose(viewer: RobotViewer | null, pose: AxisPose, gripper: GripperPose = "open") {
-  if (!viewer) return;
+function applyRobotPose(viewer: RobotViewer | null, pose: AxisPose, gripper: GripperPose = "open", showKinematics = false) {
+  if (!viewer) return null;
   const rig = setupRobotRig(viewer);
-  if (!rig) return;
+  if (!rig) return null;
+  applyMarkerOffsets(rig);
   rig.x.rotation.z = MathUtils.degToRad(pose.X);
   rig.y.rotation.z = MathUtils.degToRad(pose.Y);
   rig.z.position.z = (zAxisBaseOffsetMm - pose.Z) / 1000;
   rig.w.rotation.z = MathUtils.degToRad(pose.W);
   for (const jaw of rig.jaws) jaw.part.position.copy(gripper === "close" ? jaw.close : jaw.open);
+  updateKinematicMarkers(rig, showKinematics);
   viewer.dataset.poseX = String(pose.X);
   viewer.dataset.poseY = String(pose.Y);
   viewer.dataset.poseZ = String(pose.Z);
   viewer.dataset.poseW = String(pose.W);
   viewer.dataset.gripper = gripper;
   queueModelRender(viewer);
+  return rig;
+}
+
+function updateKinematicMarkers(rig: Rig, visible: boolean) {
+  for (const marker of Object.values(rig.markers)) marker.visible = visible;
 }
 
 function formatConnectionError(error: unknown) {
@@ -277,6 +521,8 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<MachineStatus>(fallbackStatus);
+  const [previewPose, setPreviewPose] = useState<AxisPose>(() => statusPose(fallbackStatus));
+  const [previewGripper, setPreviewGripper] = useState<GripperPose>("open");
   const [logs, setLogs] = useState<SerialEvent[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [logoHidden, setLogoHidden] = useState(false);
@@ -288,6 +534,7 @@ function App() {
   const [updateMessage, setUpdateMessage] = useState("");
   const connectedRef = useRef(false);
   const lastRxAt = useRef(Date.now());
+  const commandQueueRef = useRef<string[]>([]);
 
   const disabled = !connected || busy;
 
@@ -321,6 +568,28 @@ function App() {
     }
   }
 
+  async function sendNextQueuedCommand() {
+    const command = commandQueueRef.current.shift();
+    if (!command) {
+      setBusy(false);
+      return;
+    }
+    try {
+      await invoke("send_command", { command });
+    } catch (error) {
+      commandQueueRef.current = [];
+      setBusy(false);
+      logError(error);
+    }
+  }
+
+  function sendCommandSequence(commands: string[]) {
+    if (!connected || busy || commands.length === 0) return;
+    commandQueueRef.current = [...commands];
+    setBusy(true);
+    sendNextQueuedCommand();
+  }
+
   async function connect() {
     if (!port) return;
     setConnectionError("");
@@ -336,6 +605,7 @@ function App() {
 
   async function disconnect() {
     await invoke("disconnect");
+    commandQueueRef.current = [];
     connectedRef.current = false;
     setConnected(false);
     setBusy(false);
@@ -389,6 +659,7 @@ function App() {
       }
 
       if (entry.direction === "error" && connectedRef.current) {
+        commandQueueRef.current = [];
         connectedRef.current = false;
         setConnected(false);
         setBusy(false);
@@ -403,8 +674,15 @@ function App() {
         const parsed: unknown = JSON.parse(entry.line);
         if (isStatus(parsed)) {
           setStatus(parsed);
-          setBusy(false);
+          setPreviewPose(statusPose(parsed));
+          setPreviewGripper(parsed.gripper?.state === "close" ? "close" : "open");
+          if (commandQueueRef.current.length > 0) {
+            sendNextQueuedCommand();
+          } else {
+            setBusy(false);
+          }
         } else if ((parsed as { ok?: boolean }).ok === false) {
+          commandQueueRef.current = [];
           setBusy(false);
         }
       } catch {
@@ -479,6 +757,10 @@ function App() {
             <span className="navIcon">⚙</span>
             <span>Control</span>
           </button>
+          <button className={view === "inverse" ? "active" : ""} onClick={() => setView("inverse")}>
+            <span className="navIcon">IK</span>
+            <span>Inversa</span>
+          </button>
           <button disabled><span className="navIcon">⤴</span><span>Trayectorias</span></button>
         </nav>
 
@@ -488,8 +770,8 @@ function App() {
       <section className="screen">
         <header className="topBar">
           <div>
-            <p className="sectionKicker">{view === "home" ? "Panel principal" : "Movimiento manual"}</p>
-            <h2>{view === "home" ? "Home" : "Control"}</h2>
+            <p className="sectionKicker">{view === "home" ? "Panel principal" : view === "control" ? "Movimiento manual" : "Banco de pruebas"}</p>
+            <h2>{view === "home" ? "Home" : view === "control" ? "Control" : "Inversa"}</h2>
           </div>
           {update && (
             <div className="updateBox" role="status" aria-live="polite">
@@ -527,9 +809,31 @@ function App() {
             onConnect={() => connect().catch(logError)}
             onDisconnect={() => disconnect().catch(logError)}
             onCommand={sendCommand}
+            pose={previewPose}
+            gripper={previewGripper}
+          />
+        ) : view === "control" ? (
+          <ControlView
+            status={status}
+            connected={connected}
+            disabled={disabled}
+            pose={previewPose}
+            gripper={previewGripper}
+            onPoseChange={setPreviewPose}
+            onGripperChange={setPreviewGripper}
+            onCommand={sendCommand}
+            consolePanel={serialConsole}
           />
         ) : (
-          <ControlView status={status} connected={connected} disabled={disabled} onCommand={sendCommand} consolePanel={serialConsole} />
+          <InverseView
+            status={status}
+            connected={connected}
+            disabled={disabled}
+            pose={previewPose}
+            onPoseChange={setPreviewPose}
+            onCommandSequence={sendCommandSequence}
+            consolePanel={serialConsole}
+          />
         )}
 
         {view === "home" && serialConsole}
@@ -544,6 +848,8 @@ function HomeView({
   connected,
   busy,
   status,
+  pose,
+  gripper,
   baudRate,
   connectionError,
   onPortChange,
@@ -558,6 +864,8 @@ function HomeView({
   connected: boolean;
   busy: boolean;
   status: MachineStatus;
+  pose: AxisPose;
+  gripper: GripperPose;
   baudRate: BaudRate;
   connectionError: string;
   onPortChange: (value: string) => void;
@@ -583,7 +891,7 @@ function HomeView({
         <SystemPanel status={status} />
       </aside>
 
-      <RobotStage status={status} />
+      <RobotStage status={status} pose={pose} gripper={gripper} />
 
       <aside className="rightStack">
         <ConnectionPanel
@@ -618,35 +926,46 @@ function ControlView({
   status,
   connected,
   disabled,
+  pose,
+  gripper,
+  onPoseChange,
+  onGripperChange,
   onCommand,
   consolePanel,
 }: {
   status: MachineStatus;
   connected: boolean;
   disabled: boolean;
+  pose: AxisPose;
+  gripper: GripperPose;
+  onPoseChange: (pose: AxisPose) => void;
+  onGripperChange: (gripper: GripperPose) => void;
   onCommand: SendCommand;
   consolePanel: ReactNode;
 }) {
-  const [pose, setPose] = useState<AxisPose>(() => statusPose(status));
-  const [gripper, setGripper] = useState<GripperPose>(status.gripper?.state === "close" ? "close" : "open");
-
-  useEffect(() => {
-    setPose(statusPose(status));
-    setGripper(status.gripper?.state === "close" ? "close" : "open");
-  }, [status]);
+  const [markersVisible, setMarkersVisible] = useState(false);
 
   function previewGripper(next: GripperPose) {
-    setGripper(next);
+    onGripperChange(next);
     if (!disabled) onCommand(`GRIPPER ${next.toUpperCase()}`);
   }
 
   return (
     <div className="controlGrid">
       <div className="controlCenter">
-        <RobotStage status={status} pose={pose} gripper={gripper} compact />
-        <div className={`controlStatePill ${connected ? "online" : ""}`}>
-          <span />
-          {connected ? "Conectado" : "Desconectado"}
+        <RobotStage status={status} pose={pose} gripper={gripper} compact showKinematics showMarkers={markersVisible} />
+        <div className="controlTopTools">
+          <div className={`controlStatePill ${connected ? "online" : ""}`}>
+            <span />
+            {connected ? "Conectado" : "Desconectado"}
+          </div>
+          <button
+            className={markersVisible ? "markerToggle active" : "markerToggle"}
+            type="button"
+            onClick={() => setMarkersVisible((visible) => !visible)}
+          >
+            Puntos
+          </button>
         </div>
         {consolePanel}
       </div>
@@ -660,10 +979,143 @@ function ControlView({
               axis={status.axes[name]}
               previewValue={pose[name]}
               disabled={disabled}
-              onPreviewChange={(value) => setPose((current) => ({ ...current, [name]: value }))}
+              onPreviewChange={(value) => onPoseChange({ ...pose, [name]: roundAxis(value) })}
               onCommand={onCommand}
             />
           ))}
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function InverseView({
+  status,
+  connected,
+  disabled,
+  pose,
+  onPoseChange,
+  onCommandSequence,
+  consolePanel,
+}: {
+  status: MachineStatus;
+  connected: boolean;
+  disabled: boolean;
+  pose: AxisPose;
+  onPoseChange: (pose: AxisPose) => void;
+  onCommandSequence: (commands: string[]) => void;
+  consolePanel: ReactNode;
+}) {
+  const currentPose = pose;
+  const currentFk = forwardKinematics(status, scaraGeometry, currentPose);
+  const [markersVisible, setMarkersVisible] = useState(true);
+  const [target, setTarget] = useState(() => ({
+    x: currentFk.effector.x.toFixed(1),
+    y: currentFk.effector.y.toFixed(1),
+    z: currentFk.z.toFixed(1),
+  }));
+  const [elbowMode, setElbowMode] = useState<ElbowMode>("auto");
+  const parsedTarget = {
+    x: Number(target.x),
+    y: Number(target.y),
+    z: Number(target.z),
+  };
+  const result = inverseKinematics(parsedTarget, scaraGeometry, currentPose, elbowMode);
+  const previewPose = result.ok ? result.pose : currentPose;
+  const displayCommands = result.ok ? [...result.commands].sort((a, b) => "XYZW".indexOf(a.split(" ")[1] ?? "") - "XYZW".indexOf(b.split(" ")[1] ?? "")) : ["Sin comandos"];
+
+  function updateTarget(name: keyof typeof target, value: string) {
+    setTarget((current) => ({ ...current, [name]: value }));
+  }
+
+  return (
+    <div className="inverseGrid">
+      <div className="controlCenter">
+        <RobotStage status={status} pose={previewPose} compact showKinematics showMarkers={markersVisible} />
+        <div className="controlTopTools">
+          <div className={`controlStatePill ${connected ? "online" : ""}`}>
+            <span />
+            {connected ? "Conectado" : "Desconectado"}
+          </div>
+          <button
+            className={markersVisible ? "markerToggle active" : "markerToggle"}
+            type="button"
+            onClick={() => setMarkersVisible((visible) => !visible)}
+          >
+            Puntos
+          </button>
+        </div>
+        {consolePanel}
+      </div>
+
+      <aside className="inverseSide">
+        <section className="axisCard inversePanel">
+          <div className="axisHeader">
+            <div>
+              <p>Target efector</p>
+              <h3>XYZ mm</h3>
+            </div>
+            <span className={result.ok ? "badge good" : "badge warn"}>{result.ok ? "OK" : "No valido"}</span>
+          </div>
+
+          <div className="ikInputs">
+            <label>
+              X mm
+              <input type="number" value={target.x} onChange={(event) => updateTarget("x", event.target.value)} />
+            </label>
+            <label>
+              Y mm
+              <input type="number" value={target.y} onChange={(event) => updateTarget("y", event.target.value)} />
+            </label>
+            <label>
+              Z mm
+              <input min={0} max={scaraGeometry.limits.Z} type="number" value={target.z} onChange={(event) => updateTarget("z", event.target.value)} />
+            </label>
+            <label>
+              Codo
+              <select value={elbowMode} onChange={(event) => setElbowMode(event.target.value as ElbowMode)}>
+                <option value="auto">Auto closest</option>
+                <option value="positive">Codo +</option>
+                <option value="negative">Codo -</option>
+              </select>
+            </label>
+          </div>
+
+        </section>
+
+        <section className="axisCard inversePanel">
+          <div className="axisHeader">
+            <div>
+              <p>Preview</p>
+              <h3>{result.ok ? `Codo ${result.elbow === "positive" ? "+" : "-"}` : result.reason}</h3>
+            </div>
+          </div>
+          <div className="ikMetrics">
+            <Metric label="X" value={`${formatAxisValue(result.pose.X)} deg`} />
+            <Metric label="Y" value={`${formatAxisValue(result.pose.Y)} deg`} />
+            <Metric label="Z" value={`${formatAxisValue(result.pose.Z)} mm`} />
+            <Metric label="W" value={`${formatAxisValue(result.pose.W)} deg`} />
+          </div>
+          <div className="commandList">
+            {displayCommands.map((command) => (
+              <code key={command}>{command}</code>
+            ))}
+          </div>
+          <button
+            className="primary"
+            onClick={() => {
+              onPoseChange({
+                X: roundAxis(result.pose.X),
+                Y: roundAxis(result.pose.Y),
+                Z: roundAxis(result.pose.Z),
+                W: roundAxis(result.pose.W),
+              });
+              onCommandSequence(result.commands);
+            }}
+            disabled={disabled || !result.ok}
+          >
+            Enviar preview
+          </button>
         </section>
       </aside>
     </div>
@@ -779,19 +1231,39 @@ function RobotStage({
   pose = statusPose(status),
   gripper = status.gripper?.state === "close" ? "close" : "open",
   compact = false,
+  showKinematics = false,
+  showMarkers = showKinematics,
   children,
 }: {
   status: MachineStatus;
   pose?: AxisPose;
   gripper?: GripperPose;
   compact?: boolean;
+  showKinematics?: boolean;
+  showMarkers?: boolean;
   children?: ReactNode;
 }) {
   const viewerRef = useRef<RobotViewer | null>(null);
+  const [measuredFk, setMeasuredFk] = useState<ForwardKinematics | null>(null);
+  const fk = measuredFk ?? forwardKinematics(status, scaraGeometry, pose);
 
   useEffect(() => {
-    applyRobotPose(viewerRef.current, pose, gripper);
-  }, [pose, gripper]);
+    let cancelled = false;
+    let attempts = 0;
+    const applyPose = () => {
+      if (cancelled) return;
+      const rig = applyRobotPose(viewerRef.current, pose, gripper, showMarkers);
+      setMeasuredFk(rig && showKinematics ? measuredKinematics(status, rig) : null);
+      if (!rig && attempts < 20) {
+        attempts += 1;
+        window.setTimeout(applyPose, 50);
+      }
+    };
+    applyPose();
+    return () => {
+      cancelled = true;
+    };
+  }, [status, pose, gripper, showKinematics, showMarkers]);
 
   return (
     <section className={compact ? "robotStage compact" : "robotStage"} aria-label="Vista 3D del brazo">
@@ -799,7 +1271,10 @@ function RobotStage({
         ref={viewerRef}
         className="modelSlot"
         src="/robot.gltf?v=20260702-v3"
-        onLoad={() => applyRobotPose(viewerRef.current, pose, gripper)}
+        onLoad={() => {
+          const rig = applyRobotPose(viewerRef.current, pose, gripper, showMarkers);
+          setMeasuredFk(rig && showKinematics ? measuredKinematics(status, rig) : null);
+        }}
         camera-controls
         disable-zoom
         disable-tap
@@ -816,12 +1291,22 @@ function RobotStage({
         exposure="1"
         alt="Modelo 3D del brazo SCARA"
       />
-      <div className="positionPanel">
+      <div className={showKinematics ? "positionPanel coordinatePanel" : "positionPanel"}>
         <h3>Posicion actual</h3>
-        <Metric label="X" value={`${status.axes.X.pos.toFixed(2)} deg`} />
-        <Metric label="Y" value={`${status.axes.Y.pos.toFixed(2)} deg`} />
-        <Metric label="Z" value={`${status.axes.Z.pos.toFixed(2)} mm`} />
-        <Metric label="W" value={`${status.axes.W.pos.toFixed(2)} deg`} />
+        {showKinematics ? (
+          <>
+            <Metric label="X mm" value={`${fk.effector.x.toFixed(1)} mm`} />
+            <Metric label="Y mm" value={`${fk.effector.y.toFixed(1)} mm`} />
+            <Metric label="Z mm" value={`${fk.z.toFixed(1)} mm`} />
+          </>
+        ) : (
+          <>
+            <Metric label="X" value={`${pose.X.toFixed(2)} deg`} />
+            <Metric label="Y" value={`${pose.Y.toFixed(2)} deg`} />
+            <Metric label="Z" value={`${pose.Z.toFixed(2)} mm`} />
+            <Metric label="W" value={`${pose.W.toFixed(2)} deg`} />
+          </>
+        )}
         {children && <div className="positionActions">{children}</div>}
       </div>
     </section>
@@ -843,7 +1328,7 @@ function AxisCard({
   onPreviewChange: (value: number) => void;
   onCommand: SendCommand;
 }) {
-  const [value, setValue] = useState(String(previewValue));
+  const [value, setValue] = useState(formatAxisValue(previewValue));
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
   const min = name === "Z" ? 0 : -90;
@@ -851,12 +1336,13 @@ function AxisCard({
   const clampedValue = Math.min(max, Math.max(min, Number(value) || 0));
 
   useEffect(() => {
-    setValue(String(previewValue));
+    setValue(formatAxisValue(previewValue));
   }, [previewValue]);
 
   function updateValue(next: string) {
-    setValue(next);
-    onPreviewChange(Math.min(max, Math.max(min, Number(next) || 0)));
+    const normalized = next.replace(",", ".");
+    setValue(normalized);
+    onPreviewChange(Math.min(max, Math.max(min, Number(normalized) || 0)));
   }
 
   return (
@@ -877,6 +1363,7 @@ function AxisCard({
         type="range"
         min={min}
         max={max}
+        step={1}
         value={clampedValue}
         onChange={(event) => updateValue(event.target.value)}
       />
@@ -884,7 +1371,7 @@ function AxisCard({
       <div className="axisInputs">
         <label>
           {name === "Z" ? "Altura mm" : "Grados"}
-          <input min={min} max={max} type="number" value={value} onChange={(event) => updateValue(event.target.value)} />
+          <input min={min} max={max} step={1} type="number" value={value} onChange={(event) => updateValue(event.target.value)} />
         </label>
       </div>
 
@@ -894,7 +1381,7 @@ function AxisCard({
         </button>
         <button
           className="primary"
-          onClick={() => onCommand(`MOVE ${name} ${unit} ${clampedValue}`)}
+          onClick={() => onCommand(`MOVE ${name} ${unit} ${formatAxisValue(clampedValue)}`)}
           disabled={disabled}
         >
           MOVE

@@ -509,6 +509,12 @@ h3 {
   padding: 6px 8px;
 }
 
+.robotStage.compact .positionPanel.coordinatePanel {
+  grid-template-columns: 96px repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 8px 10px;
+}
+
 .positionActions {
   grid-column: 1 / -1;
 }
@@ -541,6 +547,10 @@ h3 {
   padding: 5px 6px;
 }
 
+.robotStage.compact .coordinatePanel .metric {
+  padding: 10px 12px;
+}
+
 .metric span {
   display: block;
   color: var(--muted);
@@ -551,6 +561,10 @@ h3 {
 
 .robotStage.compact .metric span {
   font-size: 9px;
+}
+
+.robotStage.compact .coordinatePanel .metric span {
+  font-size: 12px;
 }
 
 .metric strong {
@@ -565,7 +579,13 @@ h3 {
   font-size: 12px;
 }
 
-.controlGrid {
+.robotStage.compact .coordinatePanel .metric strong {
+  margin-top: 5px;
+  font-size: 20px;
+}
+
+.controlGrid,
+.inverseGrid {
   display: grid;
   align-items: start;
   grid-template-columns: minmax(320px, 1fr) minmax(300px, 430px);
@@ -579,11 +599,17 @@ h3 {
   gap: 8px;
 }
 
-.controlStatePill {
+.controlTopTools {
   position: absolute;
   top: 10px;
   right: 10px;
   z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controlStatePill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -616,12 +642,64 @@ h3 {
   box-shadow: 0 0 12px rgba(105, 214, 75, 0.7);
 }
 
-.controlSide {
+.markerToggle {
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(7, 10, 10, 0.45);
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+}
+
+.markerToggle:hover,
+.markerToggle.active {
+  border-color: rgba(11, 124, 255, 0.45);
+  color: var(--text);
+  background: rgba(11, 124, 255, 0.16);
+}
+
+.controlSide,
+.inverseSide {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 8px;
   max-height: calc(100vh - 92px);
   min-height: 0;
+}
+
+.inverseSide {
+  align-content: start;
+  grid-template-rows: auto auto;
+}
+
+.inversePanel {
+  gap: 12px;
+}
+
+.ikInputs,
+.ikMetrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.commandList {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #2a3433;
+  background: #0b1111;
+  padding: 10px;
+}
+
+.commandList code {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: pre-wrap;
 }
 
 .axisStack {
@@ -830,7 +908,8 @@ h3 {
 
 @media (max-width: 1120px) {
   .homeGrid,
-  .controlGrid {
+  .controlGrid,
+  .inverseGrid {
     grid-template-columns: 1fr;
   }
 
