@@ -110,7 +110,7 @@ const robotPivots = {
   w: new Vector3(0.4053553898, 0.0199586406, -0.1470041904),
 };
 const zAxisBaseOffsetMm = 40;
-const zAxisTravelMm = 180;
+const zAxisTravelMm = 160;
 const gripperCloseTravelM = 0.02;
 const radToDeg = 180 / Math.PI;
 const markerOffsets = {
@@ -122,7 +122,7 @@ const markerOffsets = {
 };
 const scaraGeometry: ScaraGeometry = {
   ...makeScaraGeometry(),
-  limits: { X: 90, Y: 90, Z: 180, W: 90 },
+  limits: { X: 90, Y: 90, Z: zAxisTravelMm, W: 90 },
 };
 const robotRigs = new WeakMap<RobotViewer, Rig>();
 const xOnlyParts = new Set([
@@ -192,6 +192,18 @@ function statusPose(status: MachineStatus): AxisPose {
     Y: status.axes.Y.pos,
     Z: status.axes.Z.pos,
     W: status.axes.W.pos,
+  };
+}
+
+function normalizeStatus(status: MachineStatus): MachineStatus {
+  const z = status.axes.Z;
+  if (!z.homed) return status;
+  return {
+    ...status,
+    axes: {
+      ...status.axes,
+      Z: { ...z, pos: zAxisTravelMm + z.pos },
+    },
   };
 }
 
@@ -311,8 +323,8 @@ function inverseKinematics(target: TargetMm, geometry: ScaraGeometry, currentPos
     return { ok: false, reason: "La solucion requiere angulos fuera de -90..90 grados", pose, elbow: selected.elbow, commands: [] };
   }
 
-  const xyCommands = [`MOVE X DEG ${formatAxisValue(pose.X)}`, `MOVE Y DEG ${formatAxisValue(pose.Y)}`];
-  const zCommand = `MOVE Z MM ${formatAxisValue(pose.Z)}`;
+  const xyCommands = [`MOVE X DEG ${formatAxisValue(pose.X - currentPose.X)}`, `MOVE Y DEG ${formatAxisValue(pose.Y - currentPose.Y)}`];
+  const zCommand = `MOVE Z MM ${formatAxisValue(pose.Z - currentPose.Z)}`;
   const commands = pose.Z > currentPose.Z ? [zCommand, ...xyCommands] : [...xyCommands, zCommand];
   return { ok: true, pose, elbow: selected.elbow, commands, reason: undefined };
 }
@@ -559,6 +571,10 @@ function App() {
 
   async function sendCommand(command: string, waitsForStatus = true) {
     if (!connected || busy) return;
+    if (/^MOVE\s+Z\b/i.test(command) && !status.axes.Z.homed) {
+      setConnectionError("Haz HOME Z antes de mover el eje Z.");
+      return;
+    }
     if (waitsForStatus) setBusy(true);
     try {
       await invoke("send_command", { command });
@@ -585,6 +601,10 @@ function App() {
 
   function sendCommandSequence(commands: string[]) {
     if (!connected || busy || commands.length === 0) return;
+    if (commands.some((command) => /^MOVE\s+Z\b/i.test(command)) && !status.axes.Z.homed) {
+      setConnectionError("Haz HOME Z antes de mover el eje Z.");
+      return;
+    }
     commandQueueRef.current = [...commands];
     setBusy(true);
     sendNextQueuedCommand();
@@ -673,9 +693,10 @@ function App() {
       try {
         const parsed: unknown = JSON.parse(entry.line);
         if (isStatus(parsed)) {
-          setStatus(parsed);
-          setPreviewPose(statusPose(parsed));
-          setPreviewGripper(parsed.gripper?.state === "close" ? "close" : "open");
+          const status = normalizeStatus(parsed);
+          setStatus(status);
+          setPreviewPose(statusPose(status));
+          setPreviewGripper(status.gripper?.state === "close" ? "close" : "open");
           if (commandQueueRef.current.length > 0) {
             sendNextQueuedCommand();
           } else {
@@ -947,7 +968,7 @@ function ControlView({
 
   function previewGripper(next: GripperPose) {
     onGripperChange(next);
-    if (!disabled) onCommand(`GRIPPER ${next.toUpperCase()}`);
+    if (!disabled) onCommand(`GRIPPER ${next === "open" ? "CLOSE" : "OPEN"}`);
   }
 
   return (
@@ -1329,6 +1350,7 @@ function AxisCard({
   onCommand: SendCommand;
 }) {
   const [value, setValue] = useState(formatAxisValue(previewValue));
+  const [warning, setWarning] = useState("");
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
   const min = name === "Z" ? 0 : -90;
@@ -1341,8 +1363,18 @@ function AxisCard({
 
   function updateValue(next: string) {
     const normalized = next.replace(",", ".");
+    setWarning("");
     setValue(normalized);
     onPreviewChange(Math.min(max, Math.max(min, Number(normalized) || 0)));
+  }
+
+  function moveAxis() {
+    if (name === "Z" && !axis.homed) {
+      setWarning("Haz HOME Z antes de mover el eje Z.");
+      return;
+    }
+    setWarning("");
+    onCommand(`MOVE ${name} ${unit} ${formatAxisValue(clampedValue - axis.pos)}`);
   }
 
   return (
@@ -1376,17 +1408,21 @@ function AxisCard({
       </div>
 
       <div className="splitButtons">
-        <button onClick={() => onCommand(`HOME ${name}`)} disabled={disabled}>
+        <button onClick={() => {
+          setWarning("");
+          onCommand(`HOME ${name}`);
+        }} disabled={disabled}>
           HOME
         </button>
         <button
           className="primary"
-          onClick={() => onCommand(`MOVE ${name} ${unit} ${formatAxisValue(clampedValue)}`)}
+          onClick={moveAxis}
           disabled={disabled}
         >
           MOVE
         </button>
       </div>
+      {warning && <p className="axisSpeed">{warning}</p>}
     </article>
   );
 }
