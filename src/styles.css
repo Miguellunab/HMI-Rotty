@@ -843,7 +843,7 @@ h3 {
   grid-template-columns: 72px 1fr;
   align-items: center;
   gap: 10px;
-  padding: 10px;
+  padding: 6px 10px;
   box-shadow: none;
 }
 
@@ -861,18 +861,18 @@ h3 {
 }
 
 .controlSide .gripperCard .splitButtons button {
-  min-height: 40px;
+  min-height: 32px;
   font-size: 13px;
 }
 
 .controlBulkButtons {
-  padding: 10px;
+  padding: 6px 10px;
   border: 1px solid #2a3433;
   background: #101716;
 }
 
 .controlBulkButtons button {
-  min-height: 40px;
+  min-height: 32px;
   font-size: 13px;
 }
 
