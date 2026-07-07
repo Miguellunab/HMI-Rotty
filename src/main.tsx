@@ -110,6 +110,7 @@ const robotPivots = {
   w: new Vector3(0.4053553898, 0.0199586406, -0.1470041904),
 };
 const zAxisBaseOffsetMm = 40;
+const xHomeDeg = 90;
 const zAxisTravelMm = 170;
 const gripperCloseTravelM = 0.02;
 const radToDeg = 180 / Math.PI;
@@ -196,13 +197,14 @@ function statusPose(status: MachineStatus): AxisPose {
 }
 
 function normalizeStatus(status: MachineStatus): MachineStatus {
+  const x = status.axes.X;
   const z = status.axes.Z;
-  if (!z.homed) return status;
   return {
     ...status,
     axes: {
       ...status.axes,
-      Z: { ...z, pos: zAxisTravelMm + z.pos },
+      X: x.homed ? { ...x, pos: xHomeDeg + x.pos } : x,
+      Z: z.homed ? { ...z, pos: zAxisTravelMm + z.pos } : z,
     },
   };
 }
@@ -1005,7 +1007,6 @@ function ControlView({
         {consolePanel}
       </div>
       <aside className="controlSide">
-        <GripperCard onPreview={previewGripper} />
         <section className="axisStack">
           {axes.map((name) => (
             <AxisCard
@@ -1019,6 +1020,7 @@ function ControlView({
             />
           ))}
         </section>
+        <GripperCard onPreview={previewGripper} />
         <div className="controlBulkButtons splitButtons">
           <button onClick={() => onCommand("HOME ALL")} disabled={disabled}>
             HOME ALL
@@ -1367,8 +1369,13 @@ function AxisCard({
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
   const min = name === "Z" ? 0 : -90;
-  const max = name === "Z" ? zAxisTravelMm : 90;
-  const clampedValue = Math.min(max, Math.max(min, Number(value) || 0));
+  const max = name === "Z" ? zAxisTravelMm : name === "W" ? 0 : 90;
+  const step = name === "W" ? 90 : 1;
+  const clampValue = (next: number) => {
+    const clamped = Math.min(max, Math.max(min, next));
+    return name === "W" ? (clamped <= -45 ? -90 : 0) : clamped;
+  };
+  const clampedValue = clampValue(Number(value) || 0);
 
   useEffect(() => {
     setValue(formatAxisValue(previewValue));
@@ -1376,8 +1383,9 @@ function AxisCard({
 
   function updateValue(next: string) {
     const normalized = next.replace(",", ".");
-    setValue(normalized);
-    onPreviewChange(Math.min(max, Math.max(min, Number(normalized) || 0)));
+    const nextValue = clampValue(Number(normalized) || 0);
+    setValue(formatAxisValue(nextValue));
+    onPreviewChange(nextValue);
   }
 
   function moveAxis() {
@@ -1402,7 +1410,7 @@ function AxisCard({
         type="range"
         min={min}
         max={max}
-        step={1}
+        step={step}
         value={clampedValue}
         onChange={(event) => updateValue(event.target.value)}
       />
@@ -1410,7 +1418,7 @@ function AxisCard({
       <div className="axisInputs">
         <label>
           {name === "Z" ? "Altura mm" : "Grados"}
-          <input min={min} max={max} step={1} type="number" value={value} onChange={(event) => updateValue(event.target.value)} />
+          <input min={min} max={max} step={step} type="number" value={value} onChange={(event) => updateValue(event.target.value)} />
         </label>
       </div>
 
