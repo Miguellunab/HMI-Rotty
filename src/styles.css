@@ -272,18 +272,20 @@ p {
 
 .topActions {
   display: grid;
+  flex: 1;
   justify-items: end;
   gap: 8px;
-  max-width: 390px;
+  max-width: 760px;
 }
 
 .systemNotice {
-  display: grid;
-  gap: 3px;
-  max-width: 390px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 760px);
   border-left: 4px solid var(--yellow);
   background: rgba(255, 224, 51, 0.14);
-  padding: 9px 12px;
+  padding: 7px 12px;
   color: var(--text);
   font-weight: 800;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
@@ -296,7 +298,7 @@ p {
 }
 
 .systemNotice span {
-  line-height: 1.25;
+  line-height: 1.18;
 }
 
 .updateBox {
