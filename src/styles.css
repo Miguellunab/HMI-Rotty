@@ -408,26 +408,6 @@ h3 {
   gap: 12px;
 }
 
-.connectionError {
-  display: grid;
-  gap: 4px;
-  border-left: 4px solid var(--yellow);
-  background: rgba(255, 224, 51, 0.12);
-  padding: 10px 12px;
-  color: var(--text);
-  font-weight: 800;
-}
-
-.connectionError strong {
-  color: var(--yellow);
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.connectionError span {
-  line-height: 1.25;
-}
-
 .splitButtons,
 .metricRow {
   gap: 10px;

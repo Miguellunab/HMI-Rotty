@@ -838,7 +838,6 @@ function App() {
             busy={busy}
             status={status}
             baudRate={baudRate}
-            connectionError={connectionError}
             onPortChange={setPort}
             onBaudRateChange={setBaudRate}
             onRefreshPorts={() => refreshPorts().catch(logError)}
@@ -888,7 +887,6 @@ function HomeView({
   pose,
   gripper,
   baudRate,
-  connectionError,
   onPortChange,
   onBaudRateChange,
   onRefreshPorts,
@@ -904,7 +902,6 @@ function HomeView({
   pose: AxisPose;
   gripper: GripperPose;
   baudRate: BaudRate;
-  connectionError: string;
   onPortChange: (value: string) => void;
   onBaudRateChange: (value: BaudRate) => void;
   onRefreshPorts: () => void;
@@ -937,7 +934,6 @@ function HomeView({
           connected={connected}
           busy={busy}
           baudRate={baudRate}
-          connectionError={connectionError}
           onPortChange={onPortChange}
           onBaudRateChange={onBaudRateChange}
           onRefreshPorts={onRefreshPorts}
@@ -1175,7 +1171,6 @@ function ConnectionPanel({
   connected,
   busy,
   baudRate,
-  connectionError,
   onPortChange,
   onBaudRateChange,
   onRefreshPorts,
@@ -1187,7 +1182,6 @@ function ConnectionPanel({
   connected: boolean;
   busy: boolean;
   baudRate: BaudRate;
-  connectionError: string;
   onPortChange: (value: string) => void;
   onBaudRateChange: (value: BaudRate) => void;
   onRefreshPorts: () => void;
@@ -1221,12 +1215,6 @@ function ConnectionPanel({
           COM manual
           <input value={port} onChange={(event) => onPortChange(event.target.value.toUpperCase())} disabled={connected} placeholder="COM4" />
         </label>
-      )}
-      {connectionError && (
-        <div className="connectionError" role="alert">
-          <strong>Aviso de conexion</strong>
-          <span>{connectionError}</span>
-        </div>
       )}
       <div className="splitButtons">
         <button onClick={onRefreshPorts} disabled={connected}>
