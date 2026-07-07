@@ -270,6 +270,35 @@ p {
   gap: 16px;
 }
 
+.topActions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  max-width: 390px;
+}
+
+.systemNotice {
+  display: grid;
+  gap: 3px;
+  max-width: 390px;
+  border-left: 4px solid var(--yellow);
+  background: rgba(255, 224, 51, 0.14);
+  padding: 9px 12px;
+  color: var(--text);
+  font-weight: 800;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.systemNotice strong {
+  color: var(--yellow);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.systemNotice span {
+  line-height: 1.25;
+}
+
 .updateBox {
   display: grid;
   justify-items: end;
@@ -850,6 +879,17 @@ h3 {
 }
 
 .controlSide .gripperCard .splitButtons button {
+  min-height: 40px;
+  font-size: 13px;
+}
+
+.controlBulkButtons {
+  padding: 10px;
+  border: 1px solid #2a3433;
+  background: #101716;
+}
+
+.controlBulkButtons button {
   min-height: 40px;
   font-size: 13px;
 }

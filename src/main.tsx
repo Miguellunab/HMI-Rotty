@@ -110,7 +110,7 @@ const robotPivots = {
   w: new Vector3(0.4053553898, 0.0199586406, -0.1470041904),
 };
 const zAxisBaseOffsetMm = 40;
-const zAxisTravelMm = 160;
+const zAxisTravelMm = 170;
 const gripperCloseTravelM = 0.02;
 const radToDeg = 180 / Math.PI;
 const markerOffsets = {
@@ -526,6 +526,11 @@ function isHeartbeatLog(entry: SerialEvent) {
   return (entry.direction === "tx" && entry.line === "PING") || (entry.direction === "rx" && entry.line === '{"ok":true,"type":"pong"}');
 }
 
+function moveAxisFromCommand(command: string): AxisName | null {
+  const axis = command.match(/^MOVE\s+([XYZW])\b/i)?.[1]?.toUpperCase();
+  return axis && axes.includes(axis as AxisName) ? axis as AxisName : null;
+}
+
 function App() {
   const [view, setView] = useState<View>("home");
   const [ports, setPorts] = useState<string[]>([]);
@@ -571,8 +576,9 @@ function App() {
 
   async function sendCommand(command: string, waitsForStatus = true) {
     if (!connected || busy) return;
-    if (/^MOVE\s+Z\b/i.test(command) && !status.axes.Z.homed) {
-      setConnectionError("Haz HOME Z antes de mover el eje Z.");
+    const moveAxis = moveAxisFromCommand(command);
+    if (moveAxis && !status.axes[moveAxis].homed) {
+      setConnectionError(`Haz HOME ${moveAxis} antes de mover el eje ${moveAxis}.`);
       return;
     }
     if (waitsForStatus) setBusy(true);
@@ -601,8 +607,9 @@ function App() {
 
   function sendCommandSequence(commands: string[]) {
     if (!connected || busy || commands.length === 0) return;
-    if (commands.some((command) => /^MOVE\s+Z\b/i.test(command)) && !status.axes.Z.homed) {
-      setConnectionError("Haz HOME Z antes de mover el eje Z.");
+    const moveAxis = commands.map(moveAxisFromCommand).find((axis) => axis && !status.axes[axis].homed);
+    if (moveAxis) {
+      setConnectionError(`Haz HOME ${moveAxis} antes de mover el eje ${moveAxis}.`);
       return;
     }
     commandQueueRef.current = [...commands];
@@ -696,7 +703,7 @@ function App() {
           const status = normalizeStatus(parsed);
           setStatus(status);
           setPreviewPose(statusPose(status));
-          setPreviewGripper(status.gripper?.state === "close" ? "close" : "open");
+          setPreviewGripper(status.gripper?.state === "close" ? "open" : "close");
           if (commandQueueRef.current.length > 0) {
             sendNextQueuedCommand();
           } else {
@@ -794,25 +801,33 @@ function App() {
             <p className="sectionKicker">{view === "home" ? "Panel principal" : view === "control" ? "Movimiento manual" : "Banco de pruebas"}</p>
             <h2>{view === "home" ? "Home" : view === "control" ? "Control" : "Inversa"}</h2>
           </div>
-          {update && (
-            <div className="updateBox" role="status" aria-live="polite">
-              <button
-                className="updateButton"
-                onClick={installUpdate}
-                disabled={updateBusy}
-                title={`Actualizacion disponible: ${update.version}. Descargar e instalar.`}
-                aria-label={`Descargar e instalar actualizacion ${update.version}`}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3v11" />
-                  <path d="m7 10 5 5 5-5" />
-                  <path d="M5 20h14" />
-                </svg>
-                <span>{updateBusy ? "Actualizando" : `Actualizar ${update.version}`}</span>
-              </button>
-              {updateMessage && <small>{updateMessage}</small>}
-            </div>
-          )}
+          <div className="topActions">
+            {connectionError && (
+              <div className="systemNotice" role="alert" aria-live="polite">
+                <strong>Aviso</strong>
+                <span>{connectionError}</span>
+              </div>
+            )}
+            {update && (
+              <div className="updateBox" role="status" aria-live="polite">
+                <button
+                  className="updateButton"
+                  onClick={installUpdate}
+                  disabled={updateBusy}
+                  title={`Actualizacion disponible: ${update.version}. Descargar e instalar.`}
+                  aria-label={`Descargar e instalar actualizacion ${update.version}`}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3v11" />
+                    <path d="m7 10 5 5 5-5" />
+                    <path d="M5 20h14" />
+                  </svg>
+                  <span>{updateBusy ? "Actualizando" : `Actualizar ${update.version}`}</span>
+                </button>
+                {updateMessage && <small>{updateMessage}</small>}
+              </div>
+            )}
+          </div>
         </header>
 
         {view === "home" ? (
@@ -843,6 +858,7 @@ function App() {
             onPoseChange={setPreviewPose}
             onGripperChange={setPreviewGripper}
             onCommand={sendCommand}
+            onZero={() => setPreviewPose({ X: 0, Y: 0, Z: 0, W: 0 })}
             consolePanel={serialConsole}
           />
         ) : (
@@ -952,6 +968,7 @@ function ControlView({
   onPoseChange,
   onGripperChange,
   onCommand,
+  onZero,
   consolePanel,
 }: {
   status: MachineStatus;
@@ -962,6 +979,7 @@ function ControlView({
   onPoseChange: (pose: AxisPose) => void;
   onGripperChange: (gripper: GripperPose) => void;
   onCommand: SendCommand;
+  onZero: () => void;
   consolePanel: ReactNode;
 }) {
   const [markersVisible, setMarkersVisible] = useState(false);
@@ -1005,6 +1023,14 @@ function ControlView({
             />
           ))}
         </section>
+        <div className="controlBulkButtons splitButtons">
+          <button onClick={() => onCommand("HOME ALL")} disabled={disabled}>
+            HOME ALL
+          </button>
+          <button className="primary" onClick={onZero}>
+            ZERO
+          </button>
+        </div>
       </aside>
     </div>
   );
@@ -1350,7 +1376,6 @@ function AxisCard({
   onCommand: SendCommand;
 }) {
   const [value, setValue] = useState(formatAxisValue(previewValue));
-  const [warning, setWarning] = useState("");
   const unit = name === "Z" ? "MM" : "DEG";
   const speedSps = axis.speed_sps || axis.speed_us || 700;
   const min = name === "Z" ? 0 : -90;
@@ -1363,17 +1388,11 @@ function AxisCard({
 
   function updateValue(next: string) {
     const normalized = next.replace(",", ".");
-    setWarning("");
     setValue(normalized);
     onPreviewChange(Math.min(max, Math.max(min, Number(normalized) || 0)));
   }
 
   function moveAxis() {
-    if (name === "Z" && !axis.homed) {
-      setWarning("Haz HOME Z antes de mover el eje Z.");
-      return;
-    }
-    setWarning("");
     onCommand(`MOVE ${name} ${unit} ${formatAxisValue(clampedValue - axis.pos)}`);
   }
 
@@ -1409,7 +1428,6 @@ function AxisCard({
 
       <div className="splitButtons">
         <button onClick={() => {
-          setWarning("");
           onCommand(`HOME ${name}`);
         }} disabled={disabled}>
           HOME
@@ -1422,7 +1440,6 @@ function AxisCard({
           MOVE
         </button>
       </div>
-      {warning && <p className="axisSpeed">{warning}</p>}
     </article>
   );
 }
