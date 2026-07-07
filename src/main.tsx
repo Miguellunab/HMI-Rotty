@@ -1393,7 +1393,7 @@ function AxisCard({
   }
 
   return (
-    <article className="axisCard">
+    <article className={`axisCard ${name === "W" ? "axisCardCompact" : ""}`}>
       <div className="axisHeader">
         <div>
           <p>Eje {name}</p>

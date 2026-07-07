@@ -742,6 +742,27 @@ h3 {
   align-self: end;
 }
 
+.axisStack .axisCardCompact {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "head"
+    "range"
+    "buttons";
+  padding-block: 4px;
+}
+
+.axisStack .axisCardCompact .axisInputs {
+  display: none;
+}
+
+.axisStack .axisCardCompact input[type="range"] {
+  min-height: 16px;
+}
+
+.axisStack .axisCardCompact button {
+  min-height: 22px;
+}
+
 .axisCard {
   background: linear-gradient(180deg, rgba(29, 37, 36, 0.98), rgba(18, 24, 24, 0.98));
 }
