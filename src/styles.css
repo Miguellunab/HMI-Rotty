@@ -480,9 +480,9 @@ h3 {
   min-height: 560px;
   overflow: hidden;
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    #182120;
+    linear-gradient(90deg, rgba(255, 255, 255, 0.052) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.048) 1px, transparent 1px),
+    #1b2726;
   background-size: var(--grid) var(--grid);
 }
 

@@ -112,6 +112,10 @@ const robotPivots = {
 const zAxisBaseOffsetMm = 40;
 const xHomeDeg = 90;
 const zAxisTravelMm = 170;
+const yPreviewOffsetDeg = -8;
+const wPreviewOffsetDeg = 50;
+const previewPlasticBlack = 0x202426;
+const previewMotorGray = 0x918981;
 const gripperCloseTravelM = 0.02;
 const radToDeg = 180 / Math.PI;
 const markerOffsets = {
@@ -162,11 +166,40 @@ const wAxisParts = new Set([
   "ba_glipper",
   "User Library-MG996R",
 ]);
+const blackPreviewParts = new Set([
+  "Base cover_Base cover",
+  "Z-axis Bottom Plate_Z-axis Bottom Plate",
+  "J1 coupler_J1 coupler",
+  "Z-axis Mount Platform_Z-axis Mount Platform",
+  "Arduino UNO case p1_Arduino UNO case p1",
+  "Arduino UNO case p2_Arduino UNO case p2",
+  "soporte_rodamiento_6mm",
+  "brazodelcontrapeso_Arm 1",
+  "tapa_brazo_contrapeso_Arm 1 Cover",
+  "J2 Coupler_J2 Coupler",
+  "J3 Coupler_J3 Coupler",
+  "Arm 2_Arm 2",
+  "Arm 2 Cover_Arm 2 Cover",
+  "ba_glipper",
+  "Base.step",
+  "Rack.step",
+  "Rack.step001",
+  "SpurGear-14_teeth.step",
+  "Jaw",
+  "Jaw001",
+]);
+const oldNemaPreviewParts = new Set([
+  "Stepper NEMA 17 -  20mm shaft_Stepper NEMA 17 -  20mm shaft",
+  "Stepper NEMA 17 -  20mm shaft_Stepper NEMA 17 -  20mm shaft001",
+  "Stepper NEMA 17 -  20mm shaft_Stepper NEMA 17 -  20mm shaft002",
+]);
 const normalizePartName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 const xOnlyPartKeys = new Set([...xOnlyParts].map(normalizePartName));
 const zAxisPartKeys = new Set([...zAxisParts].map(normalizePartName));
 const yAxisPartKeys = new Set([...yAxisParts].map(normalizePartName));
 const wAxisPartKeys = new Set([...wAxisParts].map(normalizePartName));
+const blackPreviewPartKeys = new Set([...blackPreviewParts].map(normalizePartName));
+const oldNemaPreviewPartKeys = new Set([...oldNemaPreviewParts].map(normalizePartName));
 const fallbackStatus: MachineStatus = {
   ok: true,
   type: "status",
@@ -391,6 +424,23 @@ function makeKinematicMarkers() {
   };
 }
 
+function paintPreviewPart(part: SceneObject, color: number, materialColors?: Record<string, number>) {
+  (part as any).traverse((object: any) => {
+    const mesh = object as Mesh & { material?: any };
+    if (!mesh.material) return;
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map((material) => material.clone()) : mesh.material.clone();
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (!("color" in material)) continue;
+      const materialColor = materialColors?.[material.name] ?? color;
+      if (materialColors && !(material.name in materialColors)) continue;
+      material.color.setHex(materialColor);
+      if ("roughness" in material) material.roughness = 0.72;
+      if ("metalness" in material) material.metalness = 0.05;
+    }
+  });
+}
+
 function applyMarkerOffsets(rig: Rig) {
   rig.markers.origin.position.copy(robotPivots.x.clone().add(new Vector3(0, 0, -0.09)).add(markerOffsets.origin));
   rig.markers.shoulder.position.copy(new Vector3(0, 0, 0.035).add(markerOffsets.shoulder));
@@ -446,6 +496,10 @@ function setupRobotRig(viewer: RobotViewer): Rig | null {
     const primitiveKey = normalizePartName(primitiveName);
     const isJaw = key === "jaw" || key === "jaw001" || primitiveKey === "jaw" || primitiveKey === "jaw001";
     if (attached.has(part)) continue;
+    if (blackPreviewPartKeys.has(key) || blackPreviewPartKeys.has(primitiveKey)) paintPreviewPart(part, previewPlasticBlack);
+    if (oldNemaPreviewPartKeys.has(key) || oldNemaPreviewPartKeys.has(primitiveKey)) {
+      paintPreviewPart(part, previewPlasticBlack, { mat_0: previewMotorGray, mat_1: previewMotorGray, mat_2: previewMotorGray, mat_3: previewPlasticBlack });
+    }
     if (wAxisPartKeys.has(key) || wAxisPartKeys.has(primitiveKey) || /basestep|rackstep|spurgear|jaw/.test(normalizedNames)) {
       w.attach(part);
       wParts += 1;
@@ -488,9 +542,9 @@ function applyRobotPose(viewer: RobotViewer | null, pose: AxisPose, gripper: Gri
   if (!rig) return null;
   applyMarkerOffsets(rig);
   rig.x.rotation.z = MathUtils.degToRad(pose.X);
-  rig.y.rotation.z = MathUtils.degToRad(pose.Y);
+  rig.y.rotation.z = MathUtils.degToRad(pose.Y + yPreviewOffsetDeg);
   rig.z.position.z = (zAxisBaseOffsetMm - pose.Z) / 1000;
-  rig.w.rotation.z = MathUtils.degToRad(pose.W);
+  rig.w.rotation.z = MathUtils.degToRad(pose.W + wPreviewOffsetDeg);
   for (const jaw of rig.jaws) jaw.part.position.copy(gripper === "close" ? jaw.close : jaw.open);
   updateKinematicMarkers(rig, showKinematics);
   viewer.dataset.poseX = String(pose.X);
