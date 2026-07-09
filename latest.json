@@ -1,0 +1,11 @@
+{
+    "version":  "0.1.9",
+    "notes":  "HMI Rotty 0.1.9",
+    "pub_date":  "2026-07-09T12:54:19Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaWI4a0xmVC9lYzZuZXhxeFZiSloyT29WcFlQV1o0RHd0VUtIekliL3kwaXlSektncVdKT2ZXYUx5VFpyUXFPVndKaFU4cVpMUSt4YlQ5enRvVlNxN0o0bnA4U3o4MlFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgzNDQwMDAyCWZpbGU6SE1JIEJyYXpvIFNDQVJBXzAuMS45X3g2NC1zZXR1cC5leGUKWGVENVlCTDdvbHFlU2NHRlBNNXBCUXpLWDRQR2dIRDJoZGtDS0ZIbWhzNmpNangxYWxOaERBcnptMWV4VmUxZ3pNU1NqTlJ4VXNDNDVpaFh2ZGJ6QkE9PQo=",
+                                             "url":  "https://github.com/Miguellunab/HMI-Rotty/releases/download/v0.1.9/HMI.Brazo.SCARA_0.1.9_x64-setup.exe"
+                                         }
+                  }
+}

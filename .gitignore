@@ -11,5 +11,4 @@ src-tauri/gen/
 
 tauri-update.key
 tauri-update.key.pub
-latest.json
 skills-lock.json
