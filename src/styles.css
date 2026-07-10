@@ -596,12 +596,17 @@ h3 {
 }
 
 .controlGrid,
-.inverseGrid {
+.inverseGrid,
+.trajectoriesGrid {
   display: grid;
   align-items: start;
   grid-template-columns: minmax(320px, 1fr) minmax(300px, 430px);
   gap: 16px;
   min-height: 0;
+}
+
+.trajectoriesGrid {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.2fr) minmax(260px, 0.8fr);
 }
 
 .controlCenter {
@@ -711,6 +716,212 @@ h3 {
   font-size: 12px;
   font-weight: 900;
   white-space: pre-wrap;
+}
+
+.trajectoryPanel {
+  align-content: start;
+  max-height: calc(100vh - 92px);
+  overflow: auto;
+}
+
+.trajectoryTimeline {
+  grid-column: 1 / -1;
+  gap: 12px;
+  border-color: #33413f;
+  background: linear-gradient(135deg, #131b1a 0%, #0c1212 100%);
+}
+
+.trajectoryTimeline.running {
+  border-color: var(--blue);
+  box-shadow: inset 4px 0 0 var(--blue);
+}
+
+.trajectoryTimeline.completed {
+  border-color: var(--green);
+  box-shadow: inset 4px 0 0 var(--green);
+}
+
+.trajectoryTimeline.error {
+  border-color: var(--red);
+  box-shadow: inset 4px 0 0 var(--red);
+}
+
+.timelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.timelineHeader h3 {
+  margin-top: 3px;
+}
+
+.timelineHeader p,
+.timelineNote {
+  margin: 0;
+}
+
+.timelineError {
+  display: block;
+  margin-top: 5px;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.stopButton {
+  flex: 0 0 auto;
+  border-color: #71392f;
+  background: #52271f;
+}
+
+.trajectoryTimeline progress {
+  width: 100%;
+  height: 8px;
+  border: 0;
+  accent-color: var(--blue);
+}
+
+.timelineSteps {
+  display: flex;
+  gap: 0;
+  margin: 0;
+  padding: 2px 0 8px;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.timelineSteps li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(115px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 175px;
+  padding-right: 20px;
+}
+
+.timelineSteps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  right: 0;
+  width: 20px;
+  height: 2px;
+  background: #33403e;
+}
+
+.timelineSteps li > span {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #3a4644;
+  border-radius: 50%;
+  background: #0b1111;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.timelineSteps strong,
+.timelineSteps small {
+  display: block;
+}
+
+.timelineSteps strong {
+  font-size: 13px;
+}
+
+.timelineSteps small,
+.timelineNote {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.timelineSteps .done > span {
+  border-color: var(--green);
+  background: #18351d;
+  color: var(--green);
+}
+
+.timelineSteps .active > span {
+  border-color: var(--blue);
+  background: #102b4a;
+  color: #76b9ff;
+  box-shadow: 0 0 0 5px rgba(11, 124, 255, 0.14);
+}
+
+.timelineSteps .failed > span {
+  border-color: var(--red);
+  background: #431d18;
+  color: var(--red);
+}
+
+.savedList,
+.stepList,
+.trajectoryTools {
+  display: grid;
+  gap: 8px;
+}
+
+.savedItem,
+.stepItem {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #2a3433;
+  background: #101716;
+  padding: 8px;
+}
+
+.savedItem strong,
+.stepItem strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.savedItem span,
+.emptyText {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.stepItem {
+  grid-template-columns: 34px 1fr auto;
+}
+
+.stepItem > span {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  border: 1px solid #2a3433;
+  background: #0b1111;
+  color: var(--blue);
+  font-weight: 900;
+}
+
+.miniButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: end;
+}
+
+.miniButtons button,
+.trajectoryTools button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.trajectoryTools {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .axisStack {
@@ -952,7 +1163,8 @@ h3 {
 @media (max-width: 1120px) {
   .homeGrid,
   .controlGrid,
-  .inverseGrid {
+  .inverseGrid,
+  .trajectoriesGrid {
     grid-template-columns: 1fr;
   }
 

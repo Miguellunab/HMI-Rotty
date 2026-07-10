@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
+import { Calculator, Home, Route, Setting2 } from "reicon-react";
 import "@google/model-viewer";
 import { $primitivesList } from "@google/model-viewer/lib/features/scene-graph/model.js";
 import { Group, MathUtils, Mesh, MeshBasicMaterial, SphereGeometry, Vector3 } from "three";
@@ -14,10 +15,11 @@ import "./styles.css";
 
 type AxisName = "X" | "Y" | "Z" | "W";
 type BaudRate = 115200;
-type View = "home" | "control" | "inverse";
+type View = "home" | "control" | "inverse" | "trajectories";
 type SendCommand = (command: string, waitsForStatus?: boolean) => void | Promise<void>;
 type AxisPose = Record<AxisName, number>;
 type GripperPose = "open" | "close";
+type TrajectoryStepKind = "position" | "gripper" | "wait" | "home";
 type ElbowMode = "auto" | "positive" | "negative";
 type SceneObject = Group;
 type MarkerName = "origin" | "shoulder" | "elbow" | "wrist" | "effector";
@@ -103,6 +105,45 @@ interface SerialEvent {
   timestamp: number;
 }
 
+interface SavedPosition {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+  gripper: GripperPose;
+  created_at: number;
+}
+
+interface TrajectoryStep {
+  id?: number;
+  sort_index?: number;
+  kind: TrajectoryStepKind;
+  position_id?: number | null;
+  gripper?: GripperPose | null;
+  delay_ms?: number | null;
+  command?: string | null;
+}
+
+interface SavedTrajectory {
+  id: number;
+  name: string;
+  created_at: number;
+  steps: TrajectoryStep[];
+}
+
+type TrajectoryRunPhase = "running" | "stopping" | "completed" | "stopped" | "error";
+
+interface TrajectoryRun {
+  name: string;
+  steps: TrajectoryStep[];
+  activeIndex: number;
+  completedThrough: number;
+  phase: TrajectoryRunPhase;
+  error?: string;
+}
+
 const axes: AxisName[] = ["X", "Y", "Z", "W"];
 const robotPivots = {
   x: new Vector3(0.0425, 0, -0.0175),
@@ -110,7 +151,7 @@ const robotPivots = {
   w: new Vector3(0.4053553898, 0.0199586406, -0.1470041904),
 };
 const zAxisBaseOffsetMm = 40;
-const xHomeDeg = 90;
+const xHomeDeg = 0;
 const zAxisTravelMm = 170;
 const yPreviewOffsetDeg = -8;
 const wPreviewOffsetDeg = 50;
@@ -587,6 +628,31 @@ function moveAxisFromCommand(command: string): AxisName | null {
   return axis && axes.includes(axis as AxisName) ? axis as AxisName : null;
 }
 
+function positionPose(position: SavedPosition): AxisPose {
+  return { X: position.x, Y: position.y, Z: position.z, W: position.w };
+}
+
+function commandsToPose(target: AxisPose, current: AxisPose) {
+  return axes
+    .map((axis) => {
+      const delta = roundAxis(target[axis] - current[axis]);
+      if (delta === 0) return "";
+      return `MOVE ${axis} ${axis === "Z" ? "MM" : "DEG"} ${delta}`;
+    })
+    .filter(Boolean);
+}
+
+function gripperCommand(gripper: GripperPose) {
+  return `GRIPPER ${gripper === "open" ? "CLOSE" : "OPEN"}`;
+}
+
+function stepLabel(step: TrajectoryStep, positions: SavedPosition[]) {
+  if (step.kind === "position") return positions.find((position) => position.id === step.position_id)?.name ?? "Posicion borrada";
+  if (step.kind === "gripper") return `Pinza ${step.gripper === "close" ? "cerrar" : "abrir"}`;
+  if (step.kind === "wait") return `Esperar ${((step.delay_ms ?? 0) / 1000).toFixed(1)} s`;
+  return "HOME ALL";
+}
+
 function App() {
   const [view, setView] = useState<View>("home");
   const [ports, setPorts] = useState<string[]>([]);
@@ -605,11 +671,23 @@ function App() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
+  const [positions, setPositions] = useState<SavedPosition[]>([]);
+  const [trajectories, setTrajectories] = useState<SavedTrajectory[]>([]);
+  const [trajectoryRun, setTrajectoryRun] = useState<TrajectoryRun | null>(null);
   const connectedRef = useRef(false);
   const lastRxAt = useRef(Date.now());
   const commandQueueRef = useRef<string[]>([]);
+  const waitTimerRef = useRef<number | null>(null);
+  const commandInFlightRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
   const disabled = !connected || busy;
+  const viewMeta = {
+    home: ["Panel principal", "Home"],
+    control: ["Movimiento manual", "Control"],
+    inverse: ["Banco de pruebas", "Inversa"],
+    trajectories: ["Secuencias guardadas", "Trayectorias"],
+  } satisfies Record<View, [string, string]>;
 
   function logError(error: unknown) {
     const message = formatConnectionError(error);
@@ -628,6 +706,47 @@ function App() {
     if (names.length === 0) {
       setConnectionError("No se detectaron puertos. Si Arduino IDE muestra uno, escribelo manualmente, por ejemplo COM4.");
     }
+  }
+
+  async function refreshTrajectoryData() {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const [savedPositions, savedTrajectories] = await Promise.all([
+      invoke<SavedPosition[]>("list_positions"),
+      invoke<SavedTrajectory[]>("list_trajectories"),
+    ]);
+    setPositions(savedPositions);
+    setTrajectories(savedTrajectories);
+  }
+
+  async function saveCurrentPosition() {
+    const name = window.prompt("Nombre de la posicion", `P${positions.length + 1}`);
+    if (!name) return;
+    await invoke<SavedPosition>("save_position", {
+      input: {
+        name,
+        x: previewPose.X,
+        y: previewPose.Y,
+        z: previewPose.Z,
+        w: previewPose.W,
+        gripper: previewGripper,
+      },
+    });
+    await refreshTrajectoryData();
+  }
+
+  async function deleteSavedPosition(id: number) {
+    await invoke("delete_position", { id });
+    await refreshTrajectoryData();
+  }
+
+  async function saveTrajectory(input: { id?: number; name: string; steps: TrajectoryStep[] }) {
+    await invoke<SavedTrajectory>("save_trajectory", { input });
+    await refreshTrajectoryData();
+  }
+
+  async function deleteSavedTrajectory(id: number) {
+    await invoke("delete_trajectory", { id });
+    await refreshTrajectoryData();
   }
 
   async function sendCommand(command: string, waitsForStatus = true) {
@@ -650,27 +769,104 @@ function App() {
     const command = commandQueueRef.current.shift();
     if (!command) {
       setBusy(false);
+      setTrajectoryRun((run) => run?.phase === "running" ? { ...run, phase: "completed", activeIndex: run.steps.length } : run);
+      return;
+    }
+    if (command.startsWith("__STEP ")) {
+      const activeIndex = Number(command.slice(7));
+      setTrajectoryRun((run) => run ? { ...run, activeIndex } : run);
+      sendNextQueuedCommand();
+      return;
+    }
+    if (command.startsWith("__DONE ")) {
+      const completedThrough = Number(command.slice(7));
+      setTrajectoryRun((run) => run ? { ...run, completedThrough } : run);
+      sendNextQueuedCommand();
+      return;
+    }
+    if (command.startsWith("__WAIT ")) {
+      const delay = Math.max(0, Number(command.slice(7)) || 0);
+      waitTimerRef.current = window.setTimeout(() => {
+        waitTimerRef.current = null;
+        sendNextQueuedCommand();
+      }, delay);
       return;
     }
     try {
+      commandInFlightRef.current = true;
       await invoke("send_command", { command });
     } catch (error) {
+      commandInFlightRef.current = false;
       commandQueueRef.current = [];
       setBusy(false);
+      setTrajectoryRun((run) => run?.phase === "running" ? { ...run, phase: "error", error: String(error) } : run);
       logError(error);
     }
   }
 
   function sendCommandSequence(commands: string[]) {
-    if (!connected || busy || commands.length === 0) return;
+    if (!connected) return "Arduino no conectado.";
+    if (busy) return "Hay otro comando en ejecucion.";
+    if (commands.length === 0) return "La secuencia no tiene comandos.";
     const moveAxis = commands.map(moveAxisFromCommand).find((axis) => axis && !status.axes[axis].homed);
     if (moveAxis) {
-      setConnectionError(`Haz HOME ${moveAxis} antes de mover el eje ${moveAxis}.`);
-      return;
+      const error = `Haz HOME ${moveAxis} antes de mover el eje ${moveAxis}.`;
+      setConnectionError(error);
+      return error;
     }
     commandQueueRef.current = [...commands];
+    stopRequestedRef.current = false;
     setBusy(true);
     sendNextQueuedCommand();
+    return null;
+  }
+
+  function runPosition(position: SavedPosition) {
+    sendCommandSequence([...commandsToPose(positionPose(position), previewPose), gripperCommand(position.gripper)]);
+  }
+
+  function runTrajectory(steps: TrajectoryStep[], name: string) {
+    let plannedPose = { ...previewPose };
+    const commands: string[] = [];
+    for (const [index, step] of steps.entries()) {
+      commands.push(`__STEP ${index}`);
+      if (step.kind === "position") {
+        const position = positions.find((item) => item.id === step.position_id);
+        if (!position) {
+          setTrajectoryRun({ name, steps: [...steps], activeIndex: index, completedThrough: index - 1, phase: "error", error: "La posicion guardada ya no existe." });
+          return;
+        }
+        const target = positionPose(position);
+        commands.push(...commandsToPose(target, plannedPose), gripperCommand(position.gripper));
+        plannedPose = target;
+      } else if (step.kind === "gripper" && step.gripper) {
+        commands.push(gripperCommand(step.gripper));
+      } else if (step.kind === "wait") {
+        commands.push(`__WAIT ${step.delay_ms ?? 0}`);
+      } else if (step.kind === "home") {
+        commands.push("HOME ALL");
+        plannedPose = { X: 0, Y: 0, Z: 0, W: 0 };
+      }
+      commands.push(`__DONE ${index}`);
+    }
+    setTrajectoryRun({ name, steps: [...steps], activeIndex: -1, completedThrough: -1, phase: "running" });
+    const error = sendCommandSequence(commands);
+    if (error) setTrajectoryRun({ name, steps: [...steps], activeIndex: 0, completedThrough: -1, phase: "error", error });
+  }
+
+  function stopTrajectory() {
+    commandQueueRef.current = [];
+    if (waitTimerRef.current !== null) {
+      window.clearTimeout(waitTimerRef.current);
+      waitTimerRef.current = null;
+    }
+    if (commandInFlightRef.current) {
+      stopRequestedRef.current = true;
+      setTrajectoryRun((run) => run ? { ...run, phase: "stopping" } : run);
+    } else {
+      setBusy(false);
+      setTrajectoryRun((run) => run ? { ...run, phase: "stopped" } : run);
+    }
   }
 
   async function connect() {
@@ -689,9 +885,14 @@ function App() {
   async function disconnect() {
     await invoke("disconnect");
     commandQueueRef.current = [];
+    if (waitTimerRef.current !== null) window.clearTimeout(waitTimerRef.current);
+    waitTimerRef.current = null;
+    commandInFlightRef.current = false;
+    stopRequestedRef.current = false;
     connectedRef.current = false;
     setConnected(false);
     setBusy(false);
+    setTrajectoryRun((run) => run?.phase === "running" || run?.phase === "stopping" ? { ...run, phase: "stopped" } : run);
   }
 
   async function checkForUpdate() {
@@ -733,6 +934,7 @@ function App() {
   useEffect(() => {
     const isTauri = "__TAURI_INTERNALS__" in window;
     if (isTauri) refreshPorts().catch(logError);
+    if (isTauri) refreshTrajectoryData().catch(logError);
     checkForUpdate();
 
     const unlisten = isTauri ? listen<SerialEvent>("serial-event", (event) => {
@@ -743,9 +945,11 @@ function App() {
 
       if (entry.direction === "error" && connectedRef.current) {
         commandQueueRef.current = [];
+        commandInFlightRef.current = false;
         connectedRef.current = false;
         setConnected(false);
         setBusy(false);
+        setTrajectoryRun((run) => run?.phase === "running" || run?.phase === "stopping" ? { ...run, phase: "error", error: entry.line } : run);
         setConnectionError(`Conexion serial perdida: ${entry.line}`);
         return;
       }
@@ -756,18 +960,29 @@ function App() {
       try {
         const parsed: unknown = JSON.parse(entry.line);
         if (isStatus(parsed)) {
+          commandInFlightRef.current = false;
           const status = normalizeStatus(parsed);
           setStatus(status);
           setPreviewPose(statusPose(status));
           setPreviewGripper(status.gripper?.state === "close" ? "open" : "close");
-          if (commandQueueRef.current.length > 0) {
+          if (stopRequestedRef.current) {
+            stopRequestedRef.current = false;
+            setBusy(false);
+            setTrajectoryRun((run) => run ? { ...run, phase: "stopped" } : run);
+          } else if (commandQueueRef.current.length > 0) {
             sendNextQueuedCommand();
           } else {
             setBusy(false);
           }
         } else if ((parsed as { ok?: boolean }).ok === false) {
+          commandInFlightRef.current = false;
           commandQueueRef.current = [];
           setBusy(false);
+          setTrajectoryRun((run) => run?.phase === "running" || run?.phase === "stopping" ? {
+            ...run,
+            phase: "error",
+            error: String((parsed as { err?: unknown }).err ?? "El controlador rechazo el comando."),
+          } : run);
         }
       } catch {
         setLogs((items) => [{ direction: "error" as const, line: `JSON invalido: ${entry.line}`, timestamp: Date.now() }, ...items].slice(0, 300));
@@ -834,18 +1049,21 @@ function App() {
 
         <nav className="navTabs" aria-label="Menu principal">
           <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>
-            <span className="navIcon">⌂</span>
+            <span className="navIcon"><Home size={25} weight={view === "home" ? "Filled" : "Outline"} /></span>
             <span>Home</span>
           </button>
           <button className={view === "control" ? "active" : ""} onClick={() => setView("control")}>
-            <span className="navIcon">⚙</span>
+            <span className="navIcon"><Setting2 size={25} weight={view === "control" ? "Filled" : "Outline"} /></span>
             <span>Control</span>
           </button>
           <button className={view === "inverse" ? "active" : ""} onClick={() => setView("inverse")}>
-            <span className="navIcon">IK</span>
+            <span className="navIcon"><Calculator size={25} weight={view === "inverse" ? "Filled" : "Outline"} /></span>
             <span>Inversa</span>
           </button>
-          <button disabled><span className="navIcon">⤴</span><span>Trayectorias</span></button>
+          <button className={view === "trajectories" ? "active" : ""} onClick={() => setView("trajectories")}>
+            <span className="navIcon"><Route size={25} weight={view === "trajectories" ? "Filled" : "Outline"} /></span>
+            <span>Trayectorias</span>
+          </button>
         </nav>
 
         <LogoBlock hidden={logoHidden} onToggle={() => setLogoHidden((value) => !value)} />
@@ -854,8 +1072,8 @@ function App() {
       <section className="screen">
         <header className="topBar">
           <div>
-            <p className="sectionKicker">{view === "home" ? "Panel principal" : view === "control" ? "Movimiento manual" : "Banco de pruebas"}</p>
-            <h2>{view === "home" ? "Home" : view === "control" ? "Control" : "Inversa"}</h2>
+            <p className="sectionKicker">{viewMeta[view][0]}</p>
+            <h2>{viewMeta[view][1]}</h2>
           </div>
           <div className="topActions">
             {connectionError && (
@@ -914,9 +1132,10 @@ function App() {
             onGripperChange={setPreviewGripper}
             onCommand={sendCommand}
             onZero={() => setPreviewPose({ X: 0, Y: 0, Z: 0, W: 0 })}
+            onSavePosition={() => saveCurrentPosition().catch(logError)}
             consolePanel={serialConsole}
           />
-        ) : (
+        ) : view === "inverse" ? (
           <InverseView
             status={status}
             connected={connected}
@@ -924,6 +1143,20 @@ function App() {
             pose={previewPose}
             onPoseChange={setPreviewPose}
             onCommandSequence={sendCommandSequence}
+            consolePanel={serialConsole}
+          />
+        ) : (
+          <TrajectoriesView
+            disabled={disabled}
+            positions={positions}
+            trajectories={trajectories}
+            onRunPosition={runPosition}
+            onDeletePosition={(id) => deleteSavedPosition(id).catch(logError)}
+            onSaveTrajectory={(input) => saveTrajectory(input).catch(logError)}
+            onDeleteTrajectory={(id) => deleteSavedTrajectory(id).catch(logError)}
+            onRunTrajectory={runTrajectory}
+            trajectoryRun={trajectoryRun}
+            onStopTrajectory={stopTrajectory}
             consolePanel={serialConsole}
           />
         )}
@@ -1021,6 +1254,7 @@ function ControlView({
   onGripperChange,
   onCommand,
   onZero,
+  onSavePosition,
   consolePanel,
 }: {
   status: MachineStatus;
@@ -1032,13 +1266,14 @@ function ControlView({
   onGripperChange: (gripper: GripperPose) => void;
   onCommand: SendCommand;
   onZero: () => void;
+  onSavePosition: () => void;
   consolePanel: ReactNode;
 }) {
   const [markersVisible, setMarkersVisible] = useState(false);
 
   function previewGripper(next: GripperPose) {
     onGripperChange(next);
-    if (!disabled) onCommand(`GRIPPER ${next === "open" ? "CLOSE" : "OPEN"}`);
+    if (!disabled) onCommand(gripperCommand(next));
   }
 
   return (
@@ -1081,6 +1316,9 @@ function ControlView({
           </button>
           <button className="primary" onClick={onZero}>
             ZERO
+          </button>
+          <button onClick={onSavePosition}>
+            Guardar posicion
           </button>
         </div>
       </aside>
@@ -1218,6 +1456,249 @@ function InverseView({
         </section>
       </aside>
     </div>
+  );
+}
+
+function TrajectoriesView({
+  disabled,
+  positions,
+  trajectories,
+  onRunPosition,
+  onDeletePosition,
+  onSaveTrajectory,
+  onDeleteTrajectory,
+  onRunTrajectory,
+  trajectoryRun,
+  onStopTrajectory,
+  consolePanel,
+}: {
+  disabled: boolean;
+  positions: SavedPosition[];
+  trajectories: SavedTrajectory[];
+  onRunPosition: (position: SavedPosition) => void;
+  onDeletePosition: (id: number) => void;
+  onSaveTrajectory: (input: { id?: number; name: string; steps: TrajectoryStep[] }) => void;
+  onDeleteTrajectory: (id: number) => void;
+  onRunTrajectory: (steps: TrajectoryStep[], name: string) => void;
+  trajectoryRun: TrajectoryRun | null;
+  onStopTrajectory: () => void;
+  consolePanel: ReactNode;
+}) {
+  const [draftId, setDraftId] = useState<number | undefined>();
+  const [draftName, setDraftName] = useState("Demo pick-place");
+  const [draftSteps, setDraftSteps] = useState<TrajectoryStep[]>([]);
+  const [waitSeconds, setWaitSeconds] = useState("3");
+
+  function addStep(step: TrajectoryStep) {
+    setDraftSteps((steps) => [...steps, step]);
+  }
+
+  function moveStep(index: number, direction: -1 | 1) {
+    setDraftSteps((steps) => {
+      const next = [...steps];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return steps;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function loadTrajectory(trajectory: SavedTrajectory) {
+    setDraftId(trajectory.id);
+    setDraftName(trajectory.name);
+    setDraftSteps(trajectory.steps);
+  }
+
+  function loadDemo() {
+    const [a, b, c, d, e] = positions;
+    const steps: TrajectoryStep[] = [];
+    if (a) steps.push({ kind: "position", position_id: a.id });
+    steps.push({ kind: "gripper", gripper: "close" }, { kind: "wait", delay_ms: 3000 });
+    if (b) steps.push({ kind: "position", position_id: b.id });
+    if (c) steps.push({ kind: "position", position_id: c.id });
+    steps.push({ kind: "gripper", gripper: "open" }, { kind: "wait", delay_ms: 3000 });
+    if (d) steps.push({ kind: "position", position_id: d.id });
+    steps.push({ kind: "gripper", gripper: "close" });
+    if (e) steps.push({ kind: "position", position_id: e.id });
+    steps.push({ kind: "home", command: "HOME ALL" });
+    setDraftId(undefined);
+    setDraftName("Demo pick-place");
+    setDraftSteps(steps);
+  }
+
+  function saveDraft() {
+    onSaveTrajectory({ id: draftId, name: draftName, steps: draftSteps });
+  }
+
+  return (
+    <div className="trajectoriesGrid">
+      {trajectoryRun ? (
+        <TrajectoryTimeline run={trajectoryRun} positions={positions} onStop={onStopTrajectory} />
+      ) : null}
+      <section className="axisCard trajectoryPanel">
+        <div className="axisHeader">
+          <div>
+            <p>Posiciones</p>
+            <h3>{positions.length} guardadas</h3>
+          </div>
+        </div>
+        <div className="savedList">
+          {positions.length === 0 && <p className="emptyText">Guarda una posicion desde Control.</p>}
+          {positions.map((position) => (
+            <article className="savedItem" key={position.id}>
+              <div>
+                <strong>{position.name}</strong>
+                <span>
+                  X {formatAxisValue(position.x)} / Y {formatAxisValue(position.y)} / Z {formatAxisValue(position.z)} / W {formatAxisValue(position.w)} / {position.gripper}
+                </span>
+              </div>
+              <div className="miniButtons">
+                <button onClick={() => onRunPosition(position)} disabled={disabled}>
+                  Ir
+                </button>
+                <button onClick={() => addStep({ kind: "position", position_id: position.id })}>
+                  Agregar
+                </button>
+                <button onClick={() => onDeletePosition(position.id)}>
+                  Borrar
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="axisCard trajectoryPanel">
+        <div className="axisHeader">
+          <div>
+            <p>Creador</p>
+            <h3>{draftSteps.length} pasos</h3>
+          </div>
+        </div>
+        <label>
+          Nombre trayectoria
+          <input value={draftName} onChange={(event) => setDraftName(event.target.value)} />
+        </label>
+        <div className="trajectoryTools">
+          <button onClick={() => addStep({ kind: "gripper", gripper: "open" })}>Abrir pinza</button>
+          <button onClick={() => addStep({ kind: "gripper", gripper: "close" })}>Cerrar pinza</button>
+          <label>
+            Espera s
+            <input min={0} type="number" value={waitSeconds} onChange={(event) => setWaitSeconds(event.target.value)} />
+          </label>
+          <button onClick={() => addStep({ kind: "wait", delay_ms: Math.max(0, Number(waitSeconds) || 0) * 1000 })}>Agregar espera</button>
+          <button onClick={() => addStep({ kind: "home", command: "HOME ALL" })}>HOME ALL</button>
+          <button onClick={loadDemo}>Cargar demo A-E</button>
+        </div>
+        <div className="stepList">
+          {draftSteps.length === 0 && <p className="emptyText">Agrega posiciones o pasos de pinza/espera.</p>}
+          {draftSteps.map((step, index) => (
+            <article className="stepItem" key={`${index}-${step.kind}-${step.position_id ?? step.gripper ?? step.delay_ms ?? step.command}`}>
+              <span>{index + 1}</span>
+              <strong>{stepLabel(step, positions)}</strong>
+              <div className="miniButtons">
+                <button onClick={() => moveStep(index, -1)}>Subir</button>
+                <button onClick={() => moveStep(index, 1)}>Bajar</button>
+                <button onClick={() => setDraftSteps((steps) => steps.filter((_, itemIndex) => itemIndex !== index))}>Quitar</button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="splitButtons">
+          <button className="primary" onClick={saveDraft} disabled={!draftName.trim() || draftSteps.length === 0}>
+            Guardar trayectoria
+          </button>
+          <button onClick={() => onRunTrajectory(draftSteps, draftName)} disabled={disabled || draftSteps.length === 0}>
+            Ejecutar
+          </button>
+        </div>
+      </section>
+
+      <section className="axisCard trajectoryPanel">
+        <div className="axisHeader">
+          <div>
+            <p>Trayectorias</p>
+            <h3>{trajectories.length} guardadas</h3>
+          </div>
+        </div>
+        <div className="savedList">
+          {trajectories.length === 0 && <p className="emptyText">Aun no hay trayectorias guardadas.</p>}
+          {trajectories.map((trajectory) => (
+            <article className="savedItem" key={trajectory.id}>
+              <div>
+                <strong>{trajectory.name}</strong>
+                <span>{trajectory.steps.length} pasos</span>
+              </div>
+              <div className="miniButtons">
+                <button onClick={() => loadTrajectory(trajectory)}>Editar</button>
+                <button onClick={() => onRunTrajectory(trajectory.steps, trajectory.name)} disabled={disabled || trajectory.steps.length === 0}>
+                  Ejecutar
+                </button>
+                <button onClick={() => onDeleteTrajectory(trajectory.id)}>Borrar</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      {consolePanel}
+    </div>
+  );
+}
+
+function TrajectoryTimeline({
+  run,
+  positions,
+  onStop,
+}: {
+  run: TrajectoryRun;
+  positions: SavedPosition[];
+  onStop: () => void;
+}) {
+  const phaseLabel: Record<TrajectoryRunPhase, string> = {
+    running: "En ejecucion",
+    stopping: "Deteniendo",
+    completed: "Completada",
+    stopped: "Detenida",
+    error: "Fallo",
+  };
+  const activeStep = run.steps[run.activeIndex];
+  const currentLabel = activeStep ? stepLabel(activeStep, positions) : run.phase === "completed" ? "Todos los pasos terminaron" : "Preparando trayectoria";
+
+  return (
+    <section className={`axisCard trajectoryTimeline ${run.phase}`} aria-live="polite">
+      <div className="timelineHeader">
+        <div>
+          <p>{phaseLabel[run.phase]} · {run.name}</p>
+          <h3>{run.activeIndex >= 0 && run.activeIndex < run.steps.length ? `Paso ${run.activeIndex + 1} de ${run.steps.length}: ` : ""}{currentLabel}</h3>
+          {run.error ? <span className="timelineError">{run.error}</span> : null}
+        </div>
+        <button className="stopButton" onClick={onStop} disabled={run.phase !== "running"}>
+          {run.phase === "stopping" ? "Deteniendo..." : "Detener trayectoria"}
+        </button>
+      </div>
+      <progress value={run.completedThrough + 1} max={run.steps.length} aria-label="Progreso de la trayectoria" />
+      <ol className="timelineSteps">
+        {run.steps.map((step, index) => {
+          const state = index <= run.completedThrough
+            ? "done"
+            : index === run.activeIndex && run.phase === "error"
+              ? "failed"
+              : index === run.activeIndex && (run.phase === "running" || run.phase === "stopping" || run.phase === "stopped")
+                ? "active"
+                : "pending";
+          return (
+            <li className={state} key={`${index}-${step.kind}-${step.position_id ?? step.gripper ?? step.delay_ms ?? step.command}`}>
+              <span>{state === "done" ? "✓" : state === "failed" ? "!" : index + 1}</span>
+              <div>
+                <strong>{stepLabel(step, positions)}</strong>
+                <small>{state === "done" ? "Completado" : state === "failed" ? "Fallo aqui" : state === "active" ? phaseLabel[run.phase] : "Pendiente"}</small>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      {run.phase === "running" || run.phase === "stopping" ? <p className="timelineNote">Al detener, el comando fisico actual termina y no se envia el siguiente.</p> : null}
+    </section>
   );
 }
 
