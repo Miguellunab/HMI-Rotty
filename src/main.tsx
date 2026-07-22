@@ -837,7 +837,7 @@ function App() {
           return;
         }
         const target = positionPose(position);
-        commands.push(...commandsToPose(target, plannedPose), gripperCommand(position.gripper));
+        commands.push(...commandsToPose(target, plannedPose));
         plannedPose = target;
       } else if (step.kind === "gripper" && step.gripper) {
         commands.push(gripperCommand(step.gripper));
@@ -1131,7 +1131,7 @@ function App() {
             onPoseChange={setPreviewPose}
             onGripperChange={setPreviewGripper}
             onCommand={sendCommand}
-            onZero={() => setPreviewPose({ X: 0, Y: 0, Z: 0, W: 0 })}
+            onZero={() => setPreviewPose({ X: 0, Y: 0, Z: 170, W: 0 })}
             onSavePosition={() => saveCurrentPosition().catch(logError)}
             consolePanel={serialConsole}
           />
@@ -1509,6 +1509,12 @@ function TrajectoriesView({
     setDraftSteps(trajectory.steps);
   }
 
+  function newTrajectory() {
+    setDraftId(undefined);
+    setDraftName("Nueva trayectoria");
+    setDraftSteps([]);
+  }
+
   function loadDemo() {
     const [a, b, c, d, e] = positions;
     const steps: TrajectoryStep[] = [];
@@ -1574,6 +1580,7 @@ function TrajectoriesView({
             <p>Creador</p>
             <h3>{draftSteps.length} pasos</h3>
           </div>
+          <button onClick={newTrajectory}>Nueva trayectoria</button>
         </div>
         <label>
           Nombre trayectoria
