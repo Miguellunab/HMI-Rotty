@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.2",
-    "notes":  "HMI Rotty 0.2.2",
-    "pub_date":  "2026-07-22T15:10:37Z",
+    "version":  "0.2.3",
+    "notes":  "HMI Rotty 0.2.3",
+    "pub_date":  "2026-07-23T15:00:07Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaWI4a0xmVC9lY3dENDA5cklMbzN2Z2dTcUVPNE9vblRJV1BLUE51MmR6cGt5UkpHeE45YWs3VEFMTWYvWWpML1MvQUJFQXFuN00wVk1LVUpiaEtDSkMrY05XZ0N0eGdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NzMzMDM0CWZpbGU6SE1JIEJyYXpvIFNDQVJBXzAuMi4yX3g2NC1zZXR1cC5leGUKbThya1hKRTBlcE5EQ0EzM1EyYTVKMDhQa1ROZkZVeTdDeUsrQXBVKzVuSTBOZ3BzR3JaRFRYeUdpY1pmckdsTExlekdWMzZTZkN4d0FBMlR1cWVpQmc9PQo=",
-                                             "url":  "https://github.com/Miguellunab/HMI-Rotty/releases/download/v0.2.2/HMI.Brazo.SCARA_0.2.2_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaWI4a0xmVC9lY3pjVGd4NEducFlTMENPcmNjc1FGTm8zeFY4a0lKTzA0Qkx5K1lCSklNVmdXdWdkMUM3b0J1L01qMHB6SkJhWk05Z0RnK0VBQ2pFWVJEcEphaTZmNkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODE4ODA0CWZpbGU6SE1JIEJyYXpvIFNDQVJBXzAuMi4zX3g2NC1zZXR1cC5leGUKNTcxbW1jUS9vbXdZK2JhR1BhOThMcDB6ZnZTQy9hVUxwMmZqL2JONXZMM0NzcDVVL3dGSHFGUlBpZGlTU0o1YjRwVkx5ektMSm42QytQMTR5eEZ6QUE9PQo=",
+                                             "url":  "https://github.com/Miguellunab/HMI-Rotty/releases/download/v0.2.3/HMI.Brazo.SCARA_0.2.3_x64-setup.exe"
                                          }
                   }
 }
