@@ -609,6 +609,221 @@ h3 {
   grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.2fr) minmax(260px, 0.8fr);
 }
 
+.visionGrid {
+  display: grid;
+  grid-template-columns: minmax(480px, 720px) minmax(240px, 290px);
+  justify-content: center;
+  align-items: start;
+  gap: 16px;
+  min-height: 0;
+}
+
+.visionStage {
+  width: 100%;
+  max-width: 720px;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.visionStageHeader,
+.visionStreamFooter,
+.visionState,
+.visionLiveTag {
+  display: flex;
+  align-items: center;
+}
+
+.visionStageHeader {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.visionStageHeader h3 {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.visionLiveTag {
+  gap: 8px;
+  border: 1px solid #3b4644;
+  border-radius: 999px;
+  background: #0a0f0f;
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.visionLiveTag i,
+.visionState > span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 14px rgba(255, 75, 54, 0.55);
+}
+
+.visionLiveTag.active {
+  border-color: rgba(105, 214, 75, 0.42);
+  color: var(--green);
+}
+
+.visionLiveTag.active i {
+  background: var(--green);
+  box-shadow: 0 0 14px rgba(105, 214, 75, 0.65);
+}
+
+.visionViewport {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: min(55vh, 480px);
+  min-height: 260px;
+  overflow: hidden;
+  border-block: 1px solid #2a3433;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    #050707;
+  background-size: 32px 32px;
+}
+
+.visionViewport::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  border: 1px solid rgba(11, 124, 255, 0.18);
+  box-shadow: inset 0 0 50px rgba(11, 124, 255, 0.04);
+}
+
+.visionStream {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+
+.visionPlaceholder {
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  max-width: 420px;
+  padding: 30px;
+  text-align: center;
+}
+
+.visionPlaceholder svg {
+  color: var(--blue);
+  opacity: 0.72;
+}
+
+.visionPlaceholder strong {
+  font-size: 20px;
+}
+
+.visionPlaceholder span,
+.visionStateMessage,
+.visionOwnership small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.visionStreamFooter {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.visionStreamFooter code {
+  color: var(--green);
+  text-transform: none;
+}
+
+.visionInfo {
+  align-content: start;
+  gap: 14px;
+  padding: 16px;
+}
+
+.visionState {
+  gap: 10px;
+  border: 1px solid #35403e;
+  background: #0c1212;
+  padding: 12px;
+}
+
+.visionState.ready > span,
+.visionState.running > span {
+  background: var(--green);
+  box-shadow: 0 0 14px rgba(105, 214, 75, 0.65);
+}
+
+.visionState.preparing > span,
+.visionState.starting_camera > span,
+.visionState.stopping_camera > span {
+  background: var(--yellow);
+  box-shadow: 0 0 14px rgba(255, 224, 51, 0.55);
+  animation: visionPulse 1.1s ease-in-out infinite;
+}
+
+.visionState.error > span {
+  background: var(--red);
+}
+
+.visionDetail {
+  overflow-wrap: anywhere;
+  border-left: 3px solid var(--red);
+  background: rgba(255, 75, 54, 0.08);
+  color: #f1b5ac;
+  padding: 9px 10px;
+  line-height: 1.4;
+}
+
+.visionOwnership {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid #2a3433;
+  padding-top: 14px;
+}
+
+.visionOwnership > span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.visionOwnership strong {
+  font-size: 13px;
+}
+
+.visionRetry {
+  width: 100%;
+}
+
+@keyframes visionPulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
 .controlCenter {
   position: relative;
   display: grid;
@@ -1164,7 +1379,8 @@ h3 {
   .homeGrid,
   .controlGrid,
   .inverseGrid,
-  .trajectoriesGrid {
+  .trajectoriesGrid,
+  .visionGrid {
     grid-template-columns: 1fr;
   }
 

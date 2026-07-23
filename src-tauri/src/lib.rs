@@ -3,17 +3,179 @@ use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    io::{BufRead, BufReader, Read, Write},
+    net::{SocketAddr, TcpStream},
+    path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
+        Threading::{
+            CreateMutexW, CreateProcessW, ReleaseMutex, ResumeThread, TerminateProcess,
+            WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_INFORMATION,
+            STARTUPINFOW,
+        },
+    },
+};
+
+const VISION_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const VISION_POLL_INTERVAL: Duration = Duration::from_millis(400);
+const VISION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct SerialState {
     port: Option<Box<dyn SerialPort>>,
     connected: bool,
     session: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VisionPhase {
+    Preparing,
+    Ready,
+    StartingCamera,
+    Running,
+    StoppingCamera,
+    Error,
+}
+
+struct VisionState {
+    process: Option<ManagedVisionProcess>,
+    owned: bool,
+    service_detected: bool,
+    phase: VisionPhase,
+    started_at: Option<Instant>,
+    detail: Option<String>,
+    camera_requested: bool,
+    stop_requested: bool,
+    camera_generation: u64,
+    start_sent_generation: Option<u64>,
+    stop_sent_generation: Option<u64>,
+    worker_running: bool,
+    retry_requested: bool,
+    action_in_progress: bool,
+    closing: bool,
+}
+
+impl VisionState {
+    fn new() -> Self {
+        Self {
+            process: None,
+            owned: false,
+            service_detected: false,
+            phase: VisionPhase::Preparing,
+            started_at: None,
+            detail: None,
+            camera_requested: false,
+            stop_requested: false,
+            camera_generation: 0,
+            start_sent_generation: None,
+            stop_sent_generation: None,
+            worker_running: false,
+            retry_requested: false,
+            action_in_progress: false,
+            closing: false,
+        }
+    }
+}
+
+#[cfg(windows)]
+struct VisionLaunchLock(HANDLE);
+
+#[cfg(windows)]
+unsafe impl Send for VisionLaunchLock {}
+
+#[cfg(windows)]
+impl Drop for VisionLaunchLock {
+    fn drop(&mut self) {
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct ManagedVisionProcess {
+    job: HANDLE,
+    process: HANDLE,
+    _launch_lock: VisionLaunchLock,
+}
+
+#[cfg(windows)]
+unsafe impl Send for ManagedVisionProcess {}
+
+#[cfg(windows)]
+impl ManagedVisionProcess {
+    fn is_running(&self) -> bool {
+        unsafe { WaitForSingleObject(self.process, 0) != 0 }
+    }
+
+    fn wait(&self, timeout: Duration) -> bool {
+        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        unsafe { WaitForSingleObject(self.process, timeout_ms) == 0 }
+    }
+
+    fn terminate(&self) {
+        unsafe {
+            TerminateJobObject(self.job, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ManagedVisionProcess {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.process);
+            CloseHandle(self.job);
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct VisionHealth {
+    status: String,
+    camera_active: bool,
+    message: Option<String>,
+}
+
+enum VisionHealthState {
+    Ready,
+    Starting,
+    Running,
+    Stopping,
+    Error(String),
+}
+
+#[derive(Serialize)]
+struct VisionStatus {
+    status: VisionPhase,
+    external: bool,
+    detail: Option<String>,
+}
+
+impl From<&VisionState> for VisionStatus {
+    fn from(state: &VisionState) -> Self {
+        Self {
+            status: state.phase,
+            external: state.service_detected && !state.owned,
+            detail: state.detail.clone(),
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -441,9 +603,593 @@ fn send_command(
     Ok(())
 }
 
+fn vision_request(method: &str, path: &str) -> Result<String, String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], 8765));
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(350))
+        .map_err(|error| error.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Err("Respuesta HTTP incompleta del servicio de vision.".into());
+    };
+    if !(headers.starts_with("HTTP/1.0 2") || headers.starts_with("HTTP/1.1 2")) {
+        return Err(format!(
+            "El servicio de vision respondio {}.",
+            headers.lines().next().unwrap_or("con un error HTTP")
+        ));
+    }
+    Ok(body.to_string())
+}
+
+fn parse_vision_health(body: &str) -> Result<VisionHealthState, String> {
+    let health: VisionHealth = serde_json::from_str(body).map_err(|error| error.to_string())?;
+    match (health.status.as_str(), health.camera_active) {
+        ("ready", false) => Ok(VisionHealthState::Ready),
+        ("starting", false) => Ok(VisionHealthState::Starting),
+        ("running", true) => Ok(VisionHealthState::Running),
+        ("stopping", _) => Ok(VisionHealthState::Stopping),
+        ("error", false) => Ok(VisionHealthState::Error(
+            health
+                .message
+                .unwrap_or_else(|| "El servicio de vision informo un error.".into()),
+        )),
+        _ => Err(format!(
+            "Estado de vision inconsistente: status={}, camera_active={}.",
+            health.status, health.camera_active
+        )),
+    }
+}
+
+fn vision_health() -> Result<VisionHealthState, String> {
+    parse_vision_health(&vision_request("GET", "/health")?)
+}
+
+fn vision_post(path: &str) -> Result<(), String> {
+    vision_request("POST", path).map(|_| ())
+}
+
+fn vision_status_snapshot(app: &AppHandle) -> Result<VisionStatus, String> {
+    let state_handle = app.state::<Mutex<VisionState>>();
+    state_handle
+        .lock()
+        .map(|state| VisionStatus::from(&*state))
+        .map_err(|_| "VISION_STATE_LOCK_FAILED".into())
+}
+
+#[cfg(windows)]
+fn wide_null(value: &Path) -> Vec<u16> {
+    value.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
+fn try_acquire_vision_launch_lock() -> Result<Option<VisionLaunchLock>, String> {
+    let name = wide_null(Path::new("Local\\HmiRottyVisionDetector"));
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let wait = WaitForSingleObject(handle, 0);
+        if wait == 0 || wait == 0x80 {
+            Ok(Some(VisionLaunchLock(handle)))
+        } else {
+            CloseHandle(handle);
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn spawn_managed_vision() -> Result<Option<ManagedVisionProcess>, String> {
+    let Some(launch_lock) = try_acquire_vision_launch_lock()? else {
+        return Ok(None);
+    };
+    if vision_health().is_ok() {
+        return Ok(None);
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| error.to_string())?
+        .with_file_name("vision_detector.exe");
+    if !executable.is_file() {
+        return Err(format!(
+            "No se encontro el sidecar en {}",
+            executable.display()
+        ));
+    }
+
+    let executable_wide = wide_null(&executable);
+    let working_directory = executable
+        .parent()
+        .map(wide_null)
+        .ok_or_else(|| "No se pudo resolver el directorio del sidecar".to_string())?;
+    let mut startup = STARTUPINFOW::default();
+    startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process = PROCESS_INFORMATION::default();
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const _,
+            std::mem::size_of_val(&limits) as u32,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error().to_string();
+            CloseHandle(job);
+            return Err(error);
+        }
+        if CreateProcessW(
+            executable_wide.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            std::ptr::null(),
+            working_directory.as_ptr(),
+            &startup,
+            &mut process,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error().to_string();
+            CloseHandle(job);
+            return Err(error);
+        }
+        if AssignProcessToJobObject(job, process.hProcess) == 0 {
+            let error = std::io::Error::last_os_error().to_string();
+            CloseHandle(process.hThread);
+            TerminateProcess(process.hProcess, 1);
+            CloseHandle(process.hProcess);
+            CloseHandle(job);
+            return Err(error);
+        }
+        if ResumeThread(process.hThread) == u32::MAX {
+            let error = std::io::Error::last_os_error().to_string();
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+            TerminateJobObject(job, 1);
+            CloseHandle(job);
+            return Err(error);
+        }
+        CloseHandle(process.hThread);
+        Ok(Some(ManagedVisionProcess {
+            job,
+            process: process.hProcess,
+            _launch_lock: launch_lock,
+        }))
+    }
+}
+
+enum VisionAction {
+    Start(u64),
+    Stop(u64),
+}
+
+fn vision_worker(app: AppHandle) {
+    loop {
+        let closing = app
+            .state::<Mutex<VisionState>>()
+            .lock()
+            .map(|state| state.closing)
+            .unwrap_or(true);
+        if closing {
+            break;
+        }
+
+        match vision_health() {
+            Ok(health) => {
+                let action = {
+                    let state_handle = app.state::<Mutex<VisionState>>();
+                    let Ok(mut state) = state_handle.lock() else {
+                        break;
+                    };
+                    state.service_detected = true;
+                    state.started_at = None;
+                    state.retry_requested = false;
+
+                    match health {
+                        VisionHealthState::Ready if state.camera_requested => {
+                            state.phase = VisionPhase::StartingCamera;
+                            state.detail = None;
+                            if state.start_sent_generation != Some(state.camera_generation) {
+                                state.start_sent_generation = Some(state.camera_generation);
+                                state.action_in_progress = true;
+                                Some(VisionAction::Start(state.camera_generation))
+                            } else {
+                                None
+                            }
+                        }
+                        VisionHealthState::Ready if state.stop_requested => {
+                            if state.stop_sent_generation != Some(state.camera_generation) {
+                                state.phase = VisionPhase::StoppingCamera;
+                                state.detail = None;
+                                state.stop_sent_generation = Some(state.camera_generation);
+                                state.action_in_progress = true;
+                                Some(VisionAction::Stop(state.camera_generation))
+                            } else {
+                                state.stop_requested = false;
+                                state.phase = VisionPhase::Ready;
+                                state.detail = None;
+                                None
+                            }
+                        }
+                        VisionHealthState::Ready => {
+                            state.phase = VisionPhase::Ready;
+                            state.detail = None;
+                            None
+                        }
+                        VisionHealthState::Running if state.camera_requested => {
+                            state.phase = VisionPhase::Running;
+                            state.detail = None;
+                            None
+                        }
+                        VisionHealthState::Running => {
+                            state.phase = VisionPhase::StoppingCamera;
+                            state.detail = None;
+                            if state.stop_sent_generation != Some(state.camera_generation) {
+                                state.stop_sent_generation = Some(state.camera_generation);
+                                state.action_in_progress = true;
+                                Some(VisionAction::Stop(state.camera_generation))
+                            } else {
+                                None
+                            }
+                        }
+                        VisionHealthState::Starting if state.camera_requested => {
+                            state.phase = VisionPhase::StartingCamera;
+                            state.detail = None;
+                            None
+                        }
+                        VisionHealthState::Starting => {
+                            state.phase = VisionPhase::StoppingCamera;
+                            state.detail = None;
+                            if state.stop_sent_generation != Some(state.camera_generation) {
+                                state.stop_sent_generation = Some(state.camera_generation);
+                                state.action_in_progress = true;
+                                Some(VisionAction::Stop(state.camera_generation))
+                            } else {
+                                None
+                            }
+                        }
+                        VisionHealthState::Stopping => {
+                            state.phase = VisionPhase::StoppingCamera;
+                            state.detail = None;
+                            None
+                        }
+                        VisionHealthState::Error(message) => {
+                            state.phase = VisionPhase::Error;
+                            state.detail = Some(message);
+                            None
+                        }
+                    }
+                };
+
+                if let Some(action) = action {
+                    let (path, generation, requested) = match action {
+                        VisionAction::Start(generation) => ("/start", generation, true),
+                        VisionAction::Stop(generation) => ("/stop", generation, false),
+                    };
+                    let result = vision_post(path);
+                    if let Ok(mut state) = app.state::<Mutex<VisionState>>().lock() {
+                        state.action_in_progress = false;
+                        if state.camera_generation == generation
+                            && state.camera_requested == requested
+                            && result.is_err()
+                        {
+                            state.phase = VisionPhase::Error;
+                            state.detail = result.err();
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let should_spawn = {
+                    let state_handle = app.state::<Mutex<VisionState>>();
+                    let Ok(mut state) = state_handle.lock() else {
+                        break;
+                    };
+
+                    let process_finished = state
+                        .process
+                        .as_ref()
+                        .is_some_and(|process| !process.is_running());
+                    let startup_timed_out = state.phase == VisionPhase::Preparing
+                        && state
+                            .started_at
+                            .is_some_and(|started| started.elapsed() >= VISION_STARTUP_TIMEOUT);
+
+                    if process_finished || startup_timed_out {
+                        if let Some(process) = state.process.take() {
+                            process.terminate();
+                        }
+                        state.owned = false;
+                        state.service_detected = false;
+                        state.retry_requested = false;
+                        state.phase = VisionPhase::Error;
+                        state.detail = Some(if process_finished {
+                            "El proceso de vision finalizo inesperadamente.".into()
+                        } else {
+                            "El servicio de vision no estuvo listo despues de 30 segundos.".into()
+                        });
+                        false
+                    } else if state.process.is_none()
+                        && state.retry_requested
+                        && !state.service_detected
+                    {
+                        state.retry_requested = false;
+                        state.started_at.get_or_insert_with(Instant::now);
+                        true
+                    } else {
+                        if state.phase != VisionPhase::Preparing || state.service_detected {
+                            state.phase = VisionPhase::Error;
+                            state.detail = Some(format!("El servicio de vision no responde: {error}"));
+                        }
+                        false
+                    }
+                };
+
+                if should_spawn {
+                    match spawn_managed_vision() {
+                        Ok(Some(process)) => {
+                            let mut process = Some(process);
+                            if let Ok(mut state) = app.state::<Mutex<VisionState>>().lock() {
+                                if !state.closing {
+                                    state.process = process.take();
+                                    state.owned = true;
+                                    state.service_detected = false;
+                                    state.phase = VisionPhase::Preparing;
+                                    state.detail = None;
+                                    state.started_at = Some(Instant::now());
+                                }
+                            }
+                            if let Some(process) = process {
+                                process.terminate();
+                            }
+                        }
+                        Ok(None) => {
+                            if let Ok(mut state) = app.state::<Mutex<VisionState>>().lock() {
+                                state.phase = VisionPhase::Preparing;
+                                state.detail =
+                                    Some("Esperando otra instancia del servicio de vision.".into());
+                            }
+                        }
+                        Err(error) => {
+                            if let Ok(mut state) = app.state::<Mutex<VisionState>>().lock() {
+                                state.phase = VisionPhase::Error;
+                                state.detail = Some(error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        thread::sleep(VISION_POLL_INTERVAL);
+    }
+
+    if let Ok(mut state) = app.state::<Mutex<VisionState>>().lock() {
+        state.worker_running = false;
+    }
+}
+
+#[tauri::command]
+fn prepare_vision(app: AppHandle) -> Result<VisionStatus, String> {
+    let (start_worker, stale_process) = {
+        let state_handle = app.state::<Mutex<VisionState>>();
+        let mut state = state_handle
+            .lock()
+            .map_err(|_| "VISION_STATE_LOCK_FAILED")?;
+        if state.closing {
+            return Ok(VisionStatus::from(&*state));
+        }
+
+        let retrying = state.phase == VisionPhase::Error;
+        let stale_process = if retrying && state.owned {
+            state.owned = false;
+            state.service_detected = false;
+            state.process.take()
+        } else {
+            None
+        };
+        if retrying {
+            state.phase = VisionPhase::Preparing;
+            state.detail = None;
+            state.started_at = Some(Instant::now());
+            state.retry_requested = !state.service_detected;
+            state.start_sent_generation = None;
+            state.stop_sent_generation = None;
+        } else if !state.worker_running {
+            state.phase = VisionPhase::Preparing;
+            state.detail = None;
+            state.started_at = Some(Instant::now());
+            state.retry_requested = true;
+        }
+
+        let start_worker = !state.worker_running;
+        if start_worker {
+            state.worker_running = true;
+        }
+        (start_worker, stale_process)
+    };
+
+    if let Some(process) = stale_process {
+        process.terminate();
+    }
+    if start_worker {
+        let worker_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || vision_worker(worker_app));
+    }
+    vision_status_snapshot(&app)
+}
+
+#[tauri::command]
+fn start_vision(app: AppHandle, generation: u64) -> Result<VisionStatus, String> {
+    let start_worker = {
+        let state_handle = app.state::<Mutex<VisionState>>();
+        let mut state = state_handle
+            .lock()
+            .map_err(|_| "VISION_STATE_LOCK_FAILED")?;
+        if generation > state.camera_generation {
+            state.camera_requested = true;
+            state.stop_requested = false;
+            state.camera_generation = generation;
+            state.start_sent_generation = None;
+            state.stop_sent_generation = None;
+            if state.phase == VisionPhase::Ready {
+                state.phase = VisionPhase::StartingCamera;
+            }
+        }
+        let start_worker = !state.worker_running && !state.closing;
+        if start_worker {
+            state.worker_running = true;
+            state.retry_requested = true;
+            state.phase = VisionPhase::Preparing;
+            state.detail = None;
+            state.started_at = Some(Instant::now());
+        }
+        start_worker
+    };
+    if start_worker {
+        let worker_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || vision_worker(worker_app));
+    }
+    vision_status_snapshot(&app)
+}
+
+#[tauri::command]
+fn vision_status(app: AppHandle) -> Result<VisionStatus, String> {
+    vision_status_snapshot(&app)
+}
+
+#[tauri::command]
+fn stop_vision(app: AppHandle, generation: u64) -> Result<VisionStatus, String> {
+    {
+        let state_handle = app.state::<Mutex<VisionState>>();
+        let mut state = state_handle
+            .lock()
+            .map_err(|_| "VISION_STATE_LOCK_FAILED")?;
+        if generation > state.camera_generation {
+            state.camera_requested = false;
+            state.stop_requested = true;
+            state.camera_generation = generation;
+            state.start_sent_generation = None;
+            state.stop_sent_generation = None;
+            if matches!(
+                state.phase,
+                VisionPhase::StartingCamera | VisionPhase::Running
+            ) {
+                state.phase = VisionPhase::StoppingCamera;
+                state.detail = None;
+            }
+        }
+    }
+    vision_status_snapshot(&app)
+}
+
+fn shutdown_vision_service(app: &AppHandle) {
+    {
+        let state_handle = app.state::<Mutex<VisionState>>();
+        let Ok(mut state) = state_handle.lock() else {
+            return;
+        };
+        state.closing = true;
+        state.camera_requested = false;
+        state.stop_requested = false;
+        state.camera_generation = state.camera_generation.wrapping_add(1);
+    }
+
+    let action_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < action_deadline {
+        let action_in_progress = app
+            .state::<Mutex<VisionState>>()
+            .lock()
+            .map(|state| state.action_in_progress)
+            .unwrap_or(false);
+        if !action_in_progress {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let (process, external_service) = {
+        let state_handle = app.state::<Mutex<VisionState>>();
+        let Ok(mut state) = state_handle.lock() else {
+            return;
+        };
+        if state.owned {
+            state.owned = false;
+            state.service_detected = false;
+            (state.process.take(), false)
+        } else {
+            (None, state.service_detected)
+        }
+    };
+
+    if let Some(process) = process {
+        let _ = vision_post("/shutdown");
+        if !process.wait(VISION_SHUTDOWN_TIMEOUT) {
+            process.terminate();
+            let _ = process.wait(Duration::from_secs(1));
+        }
+    } else if external_service {
+        let _ = vision_post("/stop");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if matches!(vision_health(), Ok(VisionHealthState::Ready)) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+#[tauri::command]
+async fn shutdown_vision(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || shutdown_vision_service(&app))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn terminate_owned_vision(app: &AppHandle) {
+    let state_handle = app.state::<Mutex<VisionState>>();
+    let process = state_handle
+        .lock()
+        .ok()
+        .and_then(|mut state| {
+            state.closing = true;
+            if state.owned {
+                state.owned = false;
+                state.process.take()
+            } else {
+                None
+            }
+        });
+    if let Some(process) = process {
+        process.terminate();
+        let _ = process.wait(Duration::from_secs(1));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Mutex::new(SerialState {
@@ -451,6 +1197,7 @@ pub fn run() {
             connected: false,
             session: 0,
         }))
+        .manage(Mutex::new(VisionState::new()))
         .invoke_handler(tauri::generate_handler![
             list_ports,
             save_position,
@@ -461,8 +1208,59 @@ pub fn run() {
             delete_trajectory,
             connect,
             disconnect,
-            send_command
+            send_command,
+            prepare_vision,
+            start_vision,
+            vision_status,
+            stop_vision,
+            shutdown_vision
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    app.run(|app, event| {
+        match event {
+            RunEvent::ExitRequested { code, api, .. } => {
+                let should_shutdown = app
+                    .state::<Mutex<VisionState>>()
+                    .lock()
+                    .map(|state| (state.owned || state.service_detected) && !state.closing)
+                    .unwrap_or(false);
+                if should_shutdown {
+                    api.prevent_exit();
+                    let exit_code = code.unwrap_or(0);
+                    let shutdown_app = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        shutdown_vision_service(&shutdown_app);
+                        shutdown_app.exit(exit_code);
+                    });
+                }
+            }
+            RunEvent::Exit => terminate_owned_vision(app),
+            _ => {}
+        }
+    });
+}
+
+#[cfg(test)]
+mod vision_tests {
+    use super::*;
+
+    #[test]
+    fn parses_service_and_camera_states() {
+        assert!(matches!(
+            parse_vision_health(r#"{"status":"ready","camera_active":false}"#),
+            Ok(VisionHealthState::Ready)
+        ));
+        assert!(matches!(
+            parse_vision_health(r#"{"status":"running","camera_active":true}"#),
+            Ok(VisionHealthState::Running)
+        ));
+        assert!(matches!(
+            parse_vision_health(
+                r#"{"status":"error","camera_active":false,"message":"camara ocupada"}"#
+            ),
+            Ok(VisionHealthState::Error(message)) if message == "camara ocupada"
+        ));
+    }
 }

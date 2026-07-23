@@ -19,7 +19,8 @@
       }
     ],
     "security": {
-      "capabilities": ["default", "desktop-capability"]
+      "capabilities": ["default", "desktop-capability"],
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:5173; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:8765; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:"
     }
   },
   "plugins": {
@@ -34,6 +35,9 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/vision_detector"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

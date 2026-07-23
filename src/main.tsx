@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { DownloadEvent } from "@tauri-apps/plugin-updater";
-import { Calculator, Home, Route, Setting2 } from "reicon-react";
+import { Calculator, Camera, Home, Route, Setting2 } from "reicon-react";
 import "@google/model-viewer";
 import { $primitivesList } from "@google/model-viewer/lib/features/scene-graph/model.js";
 import { Group, MathUtils, Mesh, MeshBasicMaterial, SphereGeometry, Vector3 } from "three";
@@ -15,7 +15,8 @@ import "./styles.css";
 
 type AxisName = "X" | "Y" | "Z" | "W";
 type BaudRate = 115200;
-type View = "home" | "control" | "inverse" | "trajectories";
+type View = "home" | "control" | "inverse" | "trajectories" | "vision";
+type VisionPhase = "preparing" | "ready" | "starting_camera" | "running" | "stopping_camera" | "error";
 type SendCommand = (command: string, waitsForStatus?: boolean) => void | Promise<void>;
 type AxisPose = Record<AxisName, number>;
 type GripperPose = "open" | "close";
@@ -23,6 +24,12 @@ type TrajectoryStepKind = "position" | "gripper" | "wait" | "home";
 type ElbowMode = "auto" | "positive" | "negative";
 type SceneObject = Group;
 type MarkerName = "origin" | "shoulder" | "elbow" | "wrist" | "effector";
+
+interface VisionServiceStatus {
+  status: VisionPhase;
+  external: boolean;
+  detail: string | null;
+}
 
 interface ScaraGeometry {
   link1Mm: number;
@@ -653,6 +660,47 @@ function stepLabel(step: TrajectoryStep, positions: SavedPosition[]) {
   return "HOME ALL";
 }
 
+const initialVisionStatus: VisionServiceStatus = {
+  status: "preparing",
+  external: false,
+  detail: null,
+};
+
+const visionStatusCopy: Record<VisionPhase, { label: string; message: string }> = {
+  preparing: {
+    label: "Preparando servicio de visión",
+    message: "El detector se está cargando en segundo plano sin encender la cámara.",
+  },
+  ready: {
+    label: "Servicio listo",
+    message: "El servicio está preparado y la cámara permanece apagada.",
+  },
+  starting_camera: {
+    label: "Iniciando cámara",
+    message: "El servicio está abriendo la webcam y preparando el video.",
+  },
+  running: {
+    label: "Cámara activa",
+    message: "La detección de manos y dedos está transmitiendo en tiempo real.",
+  },
+  stopping_camera: {
+    label: "Deteniendo cámara",
+    message: "Liberando la webcam y conservando el servicio preparado.",
+  },
+  error: {
+    label: "Error",
+    message: "El servicio de visión no pudo completar la operación.",
+  },
+};
+
+let visionPreparationScheduled = false;
+let visionGeneration = Date.now();
+
+function nextVisionGeneration() {
+  visionGeneration += 1;
+  return visionGeneration;
+}
+
 function App() {
   const [view, setView] = useState<View>("home");
   const [ports, setPorts] = useState<string[]>([]);
@@ -687,6 +735,7 @@ function App() {
     control: ["Movimiento manual", "Control"],
     inverse: ["Banco de pruebas", "Inversa"],
     trajectories: ["Secuencias guardadas", "Trayectorias"],
+    vision: ["Deteccion en tiempo real", "Vision"],
   } satisfies Record<View, [string, string]>;
 
   function logError(error: unknown) {
@@ -923,6 +972,7 @@ function App() {
           setUpdateMessage("Instalando y reiniciando...");
         }
       });
+      await invoke("shutdown_vision").catch(() => undefined);
       await relaunch();
     } catch (error) {
       setUpdateBusy(false);
@@ -935,6 +985,12 @@ function App() {
     const isTauri = "__TAURI_INTERNALS__" in window;
     if (isTauri) refreshPorts().catch(logError);
     if (isTauri) refreshTrajectoryData().catch(logError);
+    if (isTauri && !visionPreparationScheduled) {
+      visionPreparationScheduled = true;
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => void invoke("prepare_vision").catch(() => undefined), 0);
+      });
+    }
     checkForUpdate();
 
     const unlisten = isTauri ? listen<SerialEvent>("serial-event", (event) => {
@@ -1064,6 +1120,10 @@ function App() {
             <span className="navIcon"><Route size={25} weight={view === "trajectories" ? "Filled" : "Outline"} /></span>
             <span>Trayectorias</span>
           </button>
+          <button className={view === "vision" ? "active" : ""} onClick={() => setView("vision")}>
+            <span className="navIcon"><Camera size={25} weight={view === "vision" ? "Filled" : "Outline"} /></span>
+            <span>Vision</span>
+          </button>
         </nav>
 
         <LogoBlock hidden={logoHidden} onToggle={() => setLogoHidden((value) => !value)} />
@@ -1145,7 +1205,7 @@ function App() {
             onCommandSequence={sendCommandSequence}
             consolePanel={serialConsole}
           />
-        ) : (
+        ) : view === "trajectories" ? (
           <TrajectoriesView
             disabled={disabled}
             positions={positions}
@@ -1159,11 +1219,136 @@ function App() {
             onStopTrajectory={stopTrajectory}
             consolePanel={serialConsole}
           />
+        ) : (
+          <VisionView />
         )}
 
         {view === "home" && serialConsole}
       </section>
     </main>
+  );
+}
+
+function VisionView() {
+  const [service, setService] = useState<VisionServiceStatus>(initialVisionStatus);
+  const [imageError, setImageError] = useState(false);
+  const [streamKey, setStreamKey] = useState(0);
+
+  useEffect(() => {
+    let mounted = true;
+    let timer: number | undefined;
+
+    async function readStatus(command: "start_vision" | "vision_status", args?: Record<string, unknown>) {
+      try {
+        const next = await invoke<VisionServiceStatus>(command, args);
+        if (mounted) setService(next);
+      } catch (error) {
+        if (mounted) {
+          setService({ status: "error", external: false, detail: String(error) });
+        }
+      }
+    }
+
+    async function poll() {
+      await readStatus("vision_status");
+      if (mounted) timer = window.setTimeout(() => void poll(), 750);
+    }
+
+    void readStatus("start_vision", { generation: nextVisionGeneration() }).then(() => {
+      if (mounted) timer = window.setTimeout(() => void poll(), 750);
+    });
+
+    return () => {
+      mounted = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+      void invoke("stop_vision", { generation: nextVisionGeneration() }).catch(() => undefined);
+    };
+  }, []);
+
+  async function retry() {
+    setService(initialVisionStatus);
+    setImageError(false);
+    setStreamKey((value) => value + 1);
+    try {
+      await invoke<VisionServiceStatus>("prepare_vision");
+      setService(await invoke<VisionServiceStatus>("start_vision", {
+        generation: nextVisionGeneration(),
+      }));
+    } catch (error) {
+      setService({ status: "error", external: false, detail: String(error) });
+    }
+  }
+
+  const displayedPhase: VisionPhase = imageError ? "error" : service.status;
+  const copy = visionStatusCopy[displayedPhase];
+  const cameraActive = service.status === "running" && !imageError;
+  const canRetry = imageError || service.status === "error";
+
+  return (
+    <section className="visionGrid">
+      <article className="visionStage panel">
+        <div className="visionStageHeader">
+          <div>
+            <p className="sectionKicker">Salida MJPEG</p>
+            <h3>Detector de manos</h3>
+          </div>
+          <span className={`visionLiveTag ${cameraActive ? "active" : ""}`}>
+            <i aria-hidden="true" />
+            {cameraActive ? "EN VIVO" : "EN ESPERA"}
+          </span>
+        </div>
+
+        <div className="visionViewport">
+          {cameraActive ? (
+            <img
+              key={streamKey}
+              className="visionStream"
+              src="http://127.0.0.1:8765/video"
+              alt="Video en tiempo real con detección de manos y dedos"
+              onLoad={() => setImageError(false)}
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <div className="visionPlaceholder" role="status" aria-live="polite">
+              <Camera size={54} weight="Outline" />
+              <strong>{copy.label}</strong>
+              <span>{copy.message}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="visionStreamFooter">
+          <span>Fuente local</span>
+          <code>127.0.0.1:8765/video</code>
+        </div>
+      </article>
+
+      <aside className="visionInfo panel" aria-live="polite">
+        <p className="sectionKicker">Estado del servicio</p>
+        <div className={`visionState ${displayedPhase}`}>
+          <span aria-hidden="true" />
+          <strong>{copy.label}</strong>
+        </div>
+        <p className="visionStateMessage">{imageError ? "La cámara respondió, pero el flujo de video no pudo mostrarse." : copy.message}</p>
+        {service.detail && !cameraActive && <small className="visionDetail">{service.detail}</small>}
+
+        <div className="visionOwnership">
+          <span>Origen</span>
+          <strong>{service.external ? "Servicio externo reutilizado" : "Administrado por esta HMI"}</strong>
+          <small>
+            {service.external
+              ? "La cámara se detendrá al salir; el servicio externo seguirá activo."
+              : "La cámara se detendrá al salir; el servicio seguirá preparado."}
+          </small>
+        </div>
+
+        {canRetry && (
+          <button className="primary visionRetry" onClick={() => void retry()}>
+            Reintentar visión
+          </button>
+        )}
+      </aside>
+    </section>
   );
 }
 
